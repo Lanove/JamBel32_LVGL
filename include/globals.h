@@ -8,6 +8,16 @@
 #include <Wire.h>
 #include <RTClib.h>
 
+/*
+Device MAC List : 0xFC9B20F7C630 (First JamBel ever created)
+*/
+
+#define RELEASE_VER "1.00"
+#define DEVICE_MAC 0xFC9B20F7C630
+
+#define WIFI_SSID "Tenda_65A578"
+#define WIFI_PW "lpkojihu"
+
 #define VERBOSE_FLASH_MODE(MODE) MODE == FM_QIO ? "FM_QIO" : MODE == FM_QOUT    ? "FM_QOUT"      \
                                                          : MODE == FM_DIO       ? "FM_DIO"       \
                                                          : MODE == FM_DOUT      ? "FM_DOUT"      \
@@ -129,6 +139,9 @@ char tj_delete_confirm_message[128];
 static uint8_t nextBelIndex = 0;
 static uint8_t lastNextBelIndex = 255;
 
+const float gainPerVolumeStep = (I2S_MAX_GAIN - I2S_MIN_GAIN) / (I2S_VOLUME_STEP - 1.0);
+uint32_t audioVolume = 5;
+
 void lvc_label_init(lv_obj_t* label, const lv_font_t* font = &lv_font_montserrat_14, lv_align_t align = LV_ALIGN_DEFAULT, lv_coord_t offsetX = 0, lv_coord_t offsetY = 0, lv_color_t textColor = bs_dark, lv_text_align_t alignText = LV_TEXT_ALIGN_CENTER, lv_label_long_mode_t longMode = LV_LABEL_LONG_WRAP, lv_coord_t textWidth = 0);
 lv_obj_t* lvc_btn_init(lv_obj_t* btn, const char* labelText, lv_align_t align = LV_ALIGN_DEFAULT, lv_coord_t offsetX = 0,
     lv_coord_t offsetY = 0, const lv_font_t* font = &lv_font_montserrat_14,
@@ -167,6 +180,9 @@ bool templateJadwal_delete(TemplateJadwal* tj_target);
 bool templateJadwal_activeCount_load();
 bool templateJadwal_activeCount_store(int num);
 bool templateJadwal_changeUsedTJ(TemplateJadwal to, bool refreshElements, bool updateBinary);
+bool volume_store();
+bool volume_load();
+float volumeToGain(uint8_t volume);
 
 lv_obj_t* modal_create_alert(const char* message, const char* headerText = "Warning!",
     const lv_font_t* headerFont = &lv_font_montserrat_20, const lv_font_t* messageFont = &lv_font_montserrat_14,
@@ -188,6 +204,13 @@ void loadMainMenu();
 void tabOne();
 void tabTwo();
 void tabThree();
+
+enum Expander{
+    NC, // Formerly SD_CS but now NC
+    I2S_EN,
+    ST_LED,
+    AUDIO_RELAY
+};
 
 namespace Traverser {
 #define TRAVERSER_MAX_ROW 50

@@ -8,43 +8,75 @@
 #include "AudioGeneratorMP3.h"
 #include "AudioOutputI2S.h"
 #include <pcf8574.h>
+#include <plc_timer.h>
 
-RTC_DS3231 rtc;
+
+RTC_DS3231* rtc;
 SPIClass SDSPI;
-AudioGeneratorMP3 mp3PCM;
-AudioFileSourceSD mp3Source;
-AudioOutputI2S i2sOut;
-pcf8574 ioExpander;
+AudioGeneratorMP3* mp3PCM;
+AudioFileSourceSD* mp3Source;
+AudioOutputI2S* i2sOut;
+pcf8574* ioExpander;
 
 void audioTask_cb(void* pvParameters);
 TaskHandle_t audioTask;
 DateTime now;
 
+bool rtcBeginFailFlag, rtcPowerLostFlag, sdNotDetectedFlag;
+bool sdBeginFlag;
+
+bool bellPlayedFlag = false; // Flag used so JadwalBel audio is only played once, not repeated
+int bellPlayedIndex = 0;
+bool isAudioPlaying = false, // Signal from core 0, is audio playing?
+preAudioPlay = false, // Used for giving 2000ms delay after turning on relay and before playing audio file
+audioPlayFlag = false, // Signal from core 1 to core 0 to play the audiofile on path audioPath[256], cleared by core 0
+stopAudio = false; // Signal from core 0 to core 1 to turn off relay, cleared by core 1
+char audioPath[256] = { 0 };
+SemaphoreHandle_t audioMutex;
+
+bool wifiConnected;
+
 void setup(void) {
+
+  if (ESP.getEfuseMac() != DEVICE_MAC) {
+    delay(1000);
+    *((char*)0) = 0; // restart by segfault if device is illegal
+  }
+
   btStop();
   jw_used = new JadwalHari();
   jw_temp = new JadwalHari();
   tj_lists = (TemplateJadwal*)malloc(sizeof(TemplateJadwal) * TJ_MAX_LEN);
-  Serial.begin(115200);
-  Serial.printf("SDK %s\n", ESP.getSdkVersion());
-  Serial.printf("CPU Freq : %luMHz\n", ESP.getCpuFreqMHz());
-  Serial.printf("Chip Revision %d\nChip Model : %s\nChip Core : %d\n", ESP.getChipRevision(), ESP.getChipModel(), ESP.getChipCores());
-  Serial.printf("eFuse MAC : %llX\n", ESP.getEfuseMac());
-  Serial.printf("Flash Size : %luKB\nFlash Speed : %lu\nFlash Mode : %s\n", ESP.getFlashChipSize() / 1024, ESP.getFlashChipSpeed(), VERBOSE_FLASH_MODE(ESP.getFlashChipMode()));
-  Serial.printf("Sketch MD5: %s\nSketch Size : %luKB\nFree Sketch Space : %luKB\nHeap Size : %luKB\nFree Heap : %luKB\n", ESP.getSketchMD5().c_str(), ESP.getSketchSize() / 1024, ESP.getFreeSketchSpace() / 1024, ESP.getHeapSize() / 1024, ESP.getFreeHeap() / 1024);
+  rtc = new RTC_DS3231();
+  mp3PCM = new AudioGeneratorMP3();
+  mp3Source = new AudioFileSourceSD();
+  i2sOut = new AudioOutputI2S();
+  ioExpander = new pcf8574();
 
-  // read_efuse_vref(void)
+  Serial.begin(115200);
+  log_i("SDK %s", ESP.getSdkVersion());
+  log_i("Release v%s", RELEASE_VER);
+  log_i("CPU Freq : %luMHz", ESP.getCpuFreqMHz());
+  // log_i("Chip Revision %d Chip Model : %s Chip Core : %d", ESP.getChipRevision(), ESP.getChipModel(), ESP.getChipCores());
+  // log_i("Flash Size : %luKB Flash Speed : %lu Flash Mode : %s", ESP.getFlashChipSize() / 1024, ESP.getFlashChipSpeed(), VERBOSE_FLASH_MODE(ESP.getFlashChipMode()));
+  // log_i("Sketch MD5: %s Sketch Size : %luKB Free Sketch Space : %luKB Heap Size : %luKB Free Heap : %luKB", ESP.getSketchMD5().c_str(), ESP.getSketchSize() / 1024, ESP.getFreeSketchSpace() / 1024, ESP.getHeapSize() / 1024, ESP.getFreeHeap() / 1024);
+
   lv_init();
   lgfx_init();
   lvgl_esp32_init();
+  initStyles();
 
   SDSPI.begin(SD_CLK, SD_DO, SD_DI, SD_CS);
   SDSPI.setFrequency(SDSPI_FREQUENCY);
-  if (SD.begin(SD_CS, SDSPI, SDSPI_FREQUENCY, "/sd", 10U))
-    log_d("SD Card Detected!\nCard Type : %s\nCard Size : %lluMB\nTotal Bytes : %lluMB\nUsed Bytes : %lluMB\n", VERBOSE_SD_TYPE(SD.cardType()), SD.cardSize() / (1024 * 1024), SD.totalBytes() / (1024 * 1024), SD.usedBytes() / (1024 * 1024));
-  else
+  sdBeginFlag = SD.begin(SD_CS, SDSPI, SDSPI_FREQUENCY);
+  if (sdBeginFlag)
+    log_d("SD Card Detected! Card Type : %s Card Size : %lluMB Total Bytes : %lluMB Used Bytes : %lluMB", VERBOSE_SD_TYPE(SD.cardType()), SD.cardSize() / (1024 * 1024), SD.totalBytes() / (1024 * 1024), SD.usedBytes() / (1024 * 1024));
+  else {
     log_d("SD.begin() failed");
+    sdNotDetectedFlag = true;
+  }
 
+  // Uncomment following line if ESPSYS_FS is not SD
   // log_d("Inizializing FS...\n");
   // if (ESPSYS_FS.begin())
   //   log_d("FS OK!\nTotal Bytes : %llu\nUsed Bytes : %llu\nFree Bytes : %llu\n", ESPSYS_FS.totalBytes(), ESPSYS_FS.usedBytes(), (ESPSYS_FS.totalBytes() - ESPSYS_FS.usedBytes()));
@@ -52,26 +84,25 @@ void setup(void) {
   //   log_d("FS Fail!\n");
 
   Wire.begin(int(I2C_SDA), int(I2C_SCL), I2C_FREQ);
-  if (!rtc.begin())
-    Serial.println("RTC not found!");
-  if (rtc.lostPower())
-    rtc.adjust(DateTime(1900, 0, 0, 0, 0, 0));
+  rtcBeginFailFlag = !rtc->begin();
+  if (rtcBeginFailFlag)
+    log_e("RTC not found!");
+  rtcPowerLostFlag = rtc->lostPower();
 
-  now = rtc.now();
+  now = rtc->now();
+  volume_load();
   belManual_load(belManual, belManual_len);
   templateJadwal_activeName_load();
   templateJadwal_list_load();
   jadwalHari_load(&tj_used, jw_used, tj_used.tipeJadwal == TJ_MINGGUAN ? now.dayOfTheWeek() : 0);
 
-  i2sOut.SetPinout(I2S_BCK, I2S_WS, I2S_DO);
-  i2sOut.SetGain(0.016);
-  ioExpander.init(IOEXPAND_I2C_ADDRESS);
-  ioExpander.writeByte(0x00);
-  ioExpander.write(1, HIGH);
+  i2sOut->SetPinout(I2S_BCK, I2S_WS, I2S_DO);
+  i2sOut->SetGain(volumeToGain(audioVolume));
 
-  initStyles();
-  loadMainScreen();
+  ioExpander->init(IOEXPAND_I2C_ADDRESS);
+  ioExpander->writeByte(0x00);
 
+  audioMutex = xSemaphoreCreateMutex();
   xTaskCreatePinnedToCore(
     audioTask_cb,   /* Task function. */
     "audioTask",     /* name of task. */
@@ -80,15 +111,26 @@ void setup(void) {
     1,           /* priority of the task */
     &audioTask,      /* Task handle to keep track of created task */
     0);          /* pin task to core 0 */
+  log_i("Heap Size : %luKB\nFree Heap : %luKB", ESP.getHeapSize() / 1024, ESP.getFreeHeap() / 1024);
+
+  loadMainScreen();
 }
 
 unsigned long lastRTCMillis;
 uint8_t lastSecond, lastDay;
+bool stled_status = false;
+TON timerDelayStart(2000);
+TON timerDelayStop(2000);
+
 void loop() {
+
   if (millis() - lastRTCMillis >= 1000) {
     lastRTCMillis = millis();
-    now = rtc.now();
+    now = rtc->now();
+    ioExpander->write(Expander::ST_LED, stled_status);
+    stled_status = !stled_status;
   }
+
   if (lastSecond != now.second()) {
     if (lv_scr_act() == mainScreen) { // Update mainScreen clock and date every second
       lv_label_set_text_fmt(mainScreen_clock, "%02d:%02d:%02d", now.hour(), now.minute(), now.second());
@@ -96,6 +138,29 @@ void loop() {
     }
     uint16_t tbel = (now.hour() * 100) + now.minute();
     for (int i = 0; i < jw_used->jumlahBel;i++) { // Check bel index every second
+      if (tbel == jw_used->jadwalBel[i] && !bellPlayedFlag) { // Ring the audio bell once!
+
+        // Set flag to true to avoid playing audio file more than once
+        bellPlayedFlag = true;
+        bellPlayedIndex = i;
+
+        ioExpander->write(Expander::I2S_EN, HIGH);
+        ioExpander->write(Expander::AUDIO_RELAY, HIGH);
+        xSemaphoreTake(audioMutex, portMAX_DELAY);
+        // If the audio already playing,
+        // Or if the audio is stopped from playing but relay is still on then signal core 0 to play specified audio immediately
+        if (isAudioPlaying || stopAudio) {
+          if (stopAudio) // Clear stopAudio flag because we play another audio
+            stopAudio = false;
+          // Signal to core 0 to play the bell immediately
+          audioPlayFlag = true;
+          log_d("Bell rang! file : %s", audioPath);
+        } // If audio is not playing, wait for 2 seconds then play the audio
+        else
+          preAudioPlay = true;
+        strcpy(audioPath, jw_used->belAudioFile[i]);
+        xSemaphoreGive(audioMutex);
+      }
       if (tbel < jw_used->jadwalBel[i]) {
         nextBelIndex = i;
         break;
@@ -105,9 +170,15 @@ void loop() {
         break;
       }
     }
+    if (bellPlayedFlag) { // Reset the flag if time already past the played jadwalBel
+      if (tbel > jw_used->jadwalBel[bellPlayedIndex]) {
+        bellPlayedFlag = false;
+        log_d("Bell reset!");
+      }
+    }
     if (jw_used->jumlahBel == 0)
       nextBelIndex = 255;
-    if (nextBelIndex != lastNextBelIndex) { // Bel event
+    if (nextBelIndex != lastNextBelIndex) { // Update next bel
       if (lv_scr_act() == mainScreen) {
         if (nextBelIndex == 255) { // No more bell for today
           lv_label_set_text(mainScreen_nextBellClock, "");
@@ -127,26 +198,77 @@ void loop() {
       lastDay = now.day();
     }
   }
+
   lv_task_handler();
   lastSecond = now.second();
 
+  timerDelayStart.IN(preAudioPlay);
+  xSemaphoreTake(audioMutex, portMAX_DELAY);
+  timerDelayStop.IN(stopAudio);
+  xSemaphoreGive(audioMutex);
+  if (timerDelayStart.Q()) {
+    preAudioPlay = false;
+    // Signal to core 0 to play the bell
+    xSemaphoreTake(audioMutex, portMAX_DELAY);
+    audioPlayFlag = true;
+    log_d("Bell rang! file : %s", audioPath);
+    xSemaphoreGive(audioMutex);
+  }
+  if (timerDelayStop.Q()) { // Turn off relay after 2 seconds of signal from core 0 to stop
+    stopAudio = false;
+    ioExpander->write(Expander::I2S_EN, LOW);
+    ioExpander->write(Expander::AUDIO_RELAY, LOW);
+  }
   lv_timer_handler(); /* let the GUI do its work */
   delay(1);
 }
 
 void audioTask_cb(void* pvParameters) {
-  Serial.print("audioTask running on core ");
-  Serial.println(xPortGetCoreID());
-  mp3Source.open("/Earthea.mp3");
-  mp3PCM.begin(&mp3Source, &i2sOut);
+  auto is_filename_mp3 = [](const char* filename) -> bool {
+    char buffer[256];
+    strcpy(buffer, filename);
+    for (char* p = buffer; *p; p++) *p = tolower(*p);
+    const char* dot = strrchr(buffer, '.');
+    if (!dot || dot == buffer) return false;
+    return (strcmp(dot + 1, "mp3") == 0);
+  };
+  log_i("audioTask running on core %d", xPortGetCoreID());
 
+  unsigned long audioCheckMillis = 0;
+  bool lastIsAudioPlaying = false;
   for (;;) {
-    if (mp3PCM.isRunning())
+    if (millis() - audioCheckMillis >= 1000) {
+      audioCheckMillis = millis();
+      xSemaphoreTake(audioMutex, portMAX_DELAY);
+      isAudioPlaying = mp3PCM->isRunning();
+      if (lastIsAudioPlaying == true && isAudioPlaying == false && audioPlayFlag == false) { // Falling edge detection of isAudioPlaying, and no audioPlay command for core 0
+        stopAudio = true;
+        log_d("Audio stopped!");
+      }
+      if (audioPlayFlag) {
+        audioPlayFlag = false;
+        log_d("Received flag, check %s!", audioPath);
+        if (is_filename_mp3(audioPath)) { // Only open the file if it's mp3
+          if (mp3PCM->isRunning()) {
+            mp3PCM->stop();
+            mp3Source->close();
+          }
+          log_d("Playing %s!", audioPath);
+          mp3Source->open(audioPath);
+          mp3PCM->begin(mp3Source, i2sOut);
+        }
+        else
+          log_e("File is not mp3!");
+      }
+      xSemaphoreGive(audioMutex);
+      lastIsAudioPlaying = isAudioPlaying;
+    }
+    if (mp3PCM->isRunning())
     {
-      if (!mp3PCM.loop())
+      if (!mp3PCM->loop())
       {
-        mp3PCM.stop();
-        mp3Source.close();
+        mp3PCM->stop();
+        mp3Source->close();
       }
     }
     vTaskDelay(5);
@@ -154,7 +276,7 @@ void audioTask_cb(void* pvParameters) {
 }
 
 void loadMainScreen() {
-  now = rtc.now();
+  now = rtc->now();
   lv_obj_t* label;
   mainScreen = lv_obj_create(NULL);
   lv_obj_add_style(mainScreen, &scr1Bg, 0);
@@ -167,6 +289,22 @@ void loadMainScreen() {
       loadMainMenu();
     }
     }, LV_EVENT_GESTURE, NULL);
+
+
+  lv_obj_add_event_cb(mainScreen, [](lv_event_t* e) {
+    if (rtcPowerLostFlag) {
+      rtcPowerLostFlag = false;
+      modal_create_alert("RTC tidak berjalan!", "Peringatan!", &lv_font_montserrat_20, &lv_font_montserrat_14, bs_white, bs_dark, bs_danger);
+    }
+    if (rtcBeginFailFlag) {
+      rtcBeginFailFlag = false;
+      modal_create_alert("RTC tidak terdeteksi!", "Peringatan!", &lv_font_montserrat_20, &lv_font_montserrat_14, bs_white, bs_dark, bs_danger);
+    }
+    if (sdNotDetectedFlag) {
+      sdNotDetectedFlag = false;
+      modal_create_alert("Kartu SD tidak terdeteksi!", "Peringatan!", &lv_font_montserrat_20, &lv_font_montserrat_14, bs_white, bs_dark, bs_danger);
+    }
+    }, LV_EVENT_SCREEN_LOADED, NULL);
 
   // Jam Utama
   mainScreen_clock = lv_label_create(mainScreen);
@@ -336,8 +474,23 @@ void tabOne() {
       }, LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(button, [](lv_event_t* e) {
       WidgetParameterData* wpd = (WidgetParameterData*)lv_event_get_param(e);
-      // First button index is 2
-      log_d("%d\n", lv_obj_get_index(wpd->issuer));
+
+      ioExpander->write(Expander::I2S_EN, HIGH);
+      ioExpander->write(Expander::AUDIO_RELAY, HIGH);
+      xSemaphoreTake(audioMutex, portMAX_DELAY);
+      // If the audio already playing,
+      // Or if the audio is stopped from playing but relay is still on then signal core 0 to play specified audio immediately
+      if (isAudioPlaying || stopAudio) {
+        if (stopAudio) // Clear stopAudio flag because we play another audio
+          stopAudio = false;// Signal to core 0 to play the bell immediately
+        audioPlayFlag = true;
+        log_d("Bell rang! file : %s", audioPath);
+      } // If audio is not playing, wait for 2 seconds then play the audio
+      else
+        preAudioPlay = true;
+      strcpy(audioPath, belManual[lv_obj_get_index(wpd->issuer) - 2].audioFile);
+      xSemaphoreGive(audioMutex);
+
       }, LV_EVENT_REFRESH, NULL);
     if (!belManual[i].enabled)
       lv_obj_add_state(button, LV_STATE_DISABLED);
@@ -404,7 +557,6 @@ void tabTwo() {
 }
 
 void tabThree() {
-
   auto dateAndClockModal = [](lv_event_t* e) {
     auto initTextArea = [](lv_obj_t* textArea, int maxLen, lv_coord_t offsetx, lv_coord_t offsety, lv_coord_t width) {
       lv_textarea_set_max_length(textArea, maxLen);
@@ -488,17 +640,56 @@ void tabThree() {
       int ta1 = atoi(lv_textarea_get_text(lv_obj_get_child(modal, 1))),
         ta2 = atoi(lv_textarea_get_text(lv_obj_get_child(modal, 3))),
         ta3 = atoi(lv_textarea_get_text(lv_obj_get_child(modal, 5)));
-      now = rtc.now();
+      now = rtc->now();
       if (issuerIdx == 0) {
-        rtc.adjust(DateTime(now.year(), now.month(), now.day(), ta1, ta2, ta3));
+        rtc->adjust(DateTime(now.year(), now.month(), now.day(), ta1, ta2, ta3));
         log_d("Jam %d:%d:%d", ta1, ta2, ta3);
       }
       else {
-        rtc.adjust(DateTime(ta3, ta2, ta1, now.hour(), now.minute(), now.second()));
+        rtc->adjust(DateTime(ta3, ta2, ta1, now.hour(), now.minute(), now.second()));
         log_d("Tanggal %d/%d/%d", ta1, ta2, ta3);
       }
       lv_obj_del(overlay);
       }, LV_EVENT_CLICKED, issuer);
+
+    modalButton = lv_btn_create(modal);
+    lvc_btn_init(modalButton, "Batal", LV_ALIGN_BOTTOM_RIGHT, -50, 0, &lv_font_montserrat_12);
+    lv_obj_add_event_cb(modalButton, [](lv_event_t* event) {
+      void* ovl = lv_event_get_user_data(event);
+      lv_obj_del((lv_obj_t*)ovl);
+      }, LV_EVENT_CLICKED, overlay);
+  };
+  auto volumeModal = [](lv_event_t* e) {
+    lv_obj_t* overlay = lvc_create_overlay();
+
+    lv_obj_t* modal = lv_obj_create(overlay);
+    lv_obj_set_size(modal, 275, 220); // Most fit number
+    lv_obj_align(modal, LV_ALIGN_CENTER, 0, 0);
+
+    lv_obj_t* modalTitle = lv_label_create(modal);
+    lvc_label_init(modalTitle, &lv_font_montserrat_20, LV_ALIGN_TOP_LEFT, 0, -5);
+    lv_label_set_text_static(modalTitle, "Atur Volume");
+
+    lv_obj_t* modalRoller = lv_roller_create(modal);
+    lv_obj_set_width(modalRoller, lv_pct(100));
+    lv_roller_set_visible_row_count(modalRoller, 3);
+    lv_obj_set_style_bg_color(modalRoller, bs_indigo_700, LV_PART_SELECTED);
+    lv_obj_align(modalRoller, LV_ALIGN_CENTER, 0, -10);
+    lv_roller_set_options(modalRoller, "0\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10", LV_ROLLER_MODE_NORMAL);
+    lv_roller_set_selected(modalRoller, audioVolume, LV_ANIM_OFF);
+
+    lv_obj_t* modalButton = lv_btn_create(modal);
+    lvc_btn_init(modalButton, "Pilih", LV_ALIGN_BOTTOM_LEFT, 50, 0, &lv_font_montserrat_12);
+    lv_obj_add_event_cb(modalButton, [](lv_event_t* event) {
+      lv_obj_t* clickedBtn = lv_event_get_target(event);
+      lv_obj_t* overlay = lv_obj_get_parent(lv_obj_get_parent(clickedBtn));
+      lv_obj_t* modalRoller = (lv_obj_t*)lv_event_get_user_data(event);
+      int selectedIdx = lv_roller_get_selected(modalRoller);
+      audioVolume = selectedIdx;
+      volume_store();
+      i2sOut->SetGain(volumeToGain(audioVolume));
+      lv_obj_del(overlay);
+      }, LV_EVENT_CLICKED, modalRoller);
 
     modalButton = lv_btn_create(modal);
     lvc_btn_init(modalButton, "Batal", LV_ALIGN_BOTTOM_RIGHT, -50, 0, &lv_font_montserrat_12);
@@ -525,6 +716,15 @@ void tabThree() {
   lvc_label_init(componentLabel);
   lv_obj_align_to(componentLabel, adjustClockBtn, LV_ALIGN_OUT_TOP_LEFT, 0, -5);
   lv_label_set_text_static(componentLabel, "Atur Jam dan Tanggal : ");
+
+  lv_obj_t* adjustVolumeBtn = lv_btn_create(box);
+  lvc_btn_init(adjustVolumeBtn, "Atur Volume", LV_ALIGN_TOP_LEFT, 15, 145);
+  lv_obj_add_event_cb(adjustVolumeBtn, volumeModal, LV_EVENT_CLICKED, NULL);
+
+  componentLabel = lv_label_create(box);
+  lvc_label_init(componentLabel);
+  lv_obj_align_to(componentLabel, adjustVolumeBtn, LV_ALIGN_OUT_TOP_LEFT, 0, -5);
+  lv_label_set_text_static(componentLabel, "Atur Volume");
 }
 
 void tabelJadwalHariIni() {
@@ -992,6 +1192,8 @@ lv_obj_t* modal_create_alert(const char* message, const char* headerText, const 
 }
 
 bool belManual_load(BelManual* bm_target, size_t len) {
+  if (!sdBeginFlag)
+    return false;
   File file = ESPSYS_FS.open(PATH_ESPSYS"belManual.bin", "r");
   if (!file) {
     file.close();
@@ -1003,6 +1205,8 @@ bool belManual_load(BelManual* bm_target, size_t len) {
   return true;
 }
 bool belManual_store(BelManual* bm_target, size_t len) {
+  if (!sdBeginFlag)
+    return false;
   File file = ESPSYS_FS.open(PATH_ESPSYS"belManual.bin", "w");
   if (!file) {
     file.close();
@@ -1014,6 +1218,8 @@ bool belManual_store(BelManual* bm_target, size_t len) {
   return true;
 }
 bool jadwalHari_load(TemplateJadwal* tj_target, JadwalHari* jwh_target, int num) {
+  if (!sdBeginFlag)
+    return false;
   if (strlen(tj_target->name) == 0) {
     log_e("tj_target->name mustn't empty!%s");
     return false;
@@ -1032,6 +1238,8 @@ bool jadwalHari_load(TemplateJadwal* tj_target, JadwalHari* jwh_target, int num)
   return true;
 }
 bool jadwalHari_store(TemplateJadwal* tj_target, JadwalHari* jwh_target, int num) {
+  if (!sdBeginFlag)
+    return false;
   char tempPath[128];
   sprintf(tempPath, PATH_TJ"%s/%d", tj_target->name, num);
   log_d("store jh %s", tempPath);
@@ -1046,6 +1254,8 @@ bool jadwalHari_store(TemplateJadwal* tj_target, JadwalHari* jwh_target, int num
   return true;
 }
 bool templateJadwal_load(TemplateJadwal* tj_target, const char* path) {
+  if (!sdBeginFlag)
+    return false;
   File file = ESPSYS_FS.open(path, "r");
   log_d("load tj at %s", path);
   if (!file) {
@@ -1059,6 +1269,8 @@ bool templateJadwal_load(TemplateJadwal* tj_target, const char* path) {
   return true;
 }
 bool templateJadwal_store(TemplateJadwal* tj_target) {
+  if (!sdBeginFlag)
+    return false;
   char path[64];
   sprintf(path, PATH_TJ"%s.bin", tj_target->name);
   log_d("store tj at %s", path);
@@ -1073,6 +1285,8 @@ bool templateJadwal_store(TemplateJadwal* tj_target) {
   return true;
 }
 bool templateJadwal_activeName_update(const char* activeName) {
+  if (!sdBeginFlag)
+    return false;
   char temp[33];
   strcpy(temp, activeName);
   File file = ESPSYS_FS.open(PATH_ESPSYS"tj_active_name.bin", "w+");
@@ -1088,6 +1302,8 @@ bool templateJadwal_activeName_update(const char* activeName) {
   return true;
 }
 bool templateJadwal_activeName_load() {
+  if (!sdBeginFlag)
+    return false;
   File file = ESPSYS_FS.open(PATH_ESPSYS"tj_active_name.bin", "r");
   log_d("loading tj_active_name.bin");
   if (!file) {
@@ -1101,6 +1317,8 @@ bool templateJadwal_activeName_load() {
   return true;
 }
 bool templateJadwal_list_load() {
+  if (!sdBeginFlag)
+    return false;
   int tjIndex = 0;
   bool tjUsedFound = false;
   log_d("Loading TemplateJadwal lists....");
@@ -1140,6 +1358,8 @@ bool templateJadwal_list_load() {
   return true;
 }
 bool templateJadwal_create(TemplateJadwal* tj_target) {
+  if (!sdBeginFlag)
+    return false;
   log_d("\nTemplateJadwal Create Dummy");
   char path[64];
   sprintf(path, PATH_TJ"%s.bin", tj_target->name);
@@ -1174,6 +1394,8 @@ bool templateJadwal_create(TemplateJadwal* tj_target) {
   return true;
 }
 bool templateJadwal_changeUsedTJ(TemplateJadwal to, bool refreshElements, bool updateBinary) {
+  if (!sdBeginFlag)
+    return false;
   tj_used = to;
   if (refreshElements) {
     lv_obj_t* scrAct = lv_scr_act();
@@ -1187,6 +1409,8 @@ bool templateJadwal_changeUsedTJ(TemplateJadwal to, bool refreshElements, bool u
   return true;
 }
 bool templateJadwal_delete(TemplateJadwal* tj_target) {
+  if (!sdBeginFlag)
+    return false;
   log_d("\nTemplateJadwal Delete");
   char path[64];
   sprintf(path, PATH_TJ"%s", tj_target->name);
@@ -1203,6 +1427,36 @@ bool templateJadwal_delete(TemplateJadwal* tj_target) {
   }
   log_d("OK\n");
   templateJadwal_list_load(); // Reload the lists after success delete
+  return true;
+}
+bool volume_store() {
+  if (!sdBeginFlag)
+    return false;
+  File file = ESPSYS_FS.open(PATH_ESPSYS"volume.bin", "w+");
+  log_d("updating volume.bin");
+  if (!file) {
+    file.close();
+    log_e("Error opening file!");
+    return false;
+  }
+  file.write((uint8_t*)&audioVolume, sizeof(audioVolume));
+  file.close();
+  log_d("volume.bin updated");
+  return true;
+}
+bool volume_load() {
+  if (!sdBeginFlag)
+    return false;
+  File file = ESPSYS_FS.open(PATH_ESPSYS"volume.bin", "r");
+  log_d("loading volume.bin");
+  if (!file) {
+    file.close();
+    log_e("Error opening file!");
+    return false;
+  }
+  file.readBytes((char*)&audioVolume, sizeof(audioVolume));
+  file.close();
+  log_d("volume.bin loaded : %d", audioVolume);
   return true;
 }
 // Traverser functions declaration
@@ -1262,7 +1516,7 @@ void Traverser::createTraverser(lv_obj_t* issuer, const char* dir, bool build) {
   File file = root.openNextFile();
   while (file)
   {
-    if (strcmp(file.name(), "System Volume Information") != 0)
+    if (strcmp(file.name(), "System Volume Information") != 0 && strcmp(file.name(), "espsys") != 0)
       rowLen++;
     file = root.openNextFile();
   }
@@ -1301,7 +1555,7 @@ void Traverser::createTraverser(lv_obj_t* issuer, const char* dir, bool build) {
   file = root.openNextFile();
   while (file)
   {
-    if (strcmp(file.name(), "System Volume Information") != 0) {
+    if (strcmp(file.name(), "System Volume Information") != 0 && strcmp(file.name(), "espsys") != 0) {
       rowLen++;
       bool isDir = file.isDirectory();
       unsigned long size = (unsigned long)file.size();
@@ -1976,6 +2230,15 @@ void initStyles() {
   lv_style_set_bg_grad_color(&scr1Bg, bs_indigo_700);
   lv_style_set_bg_grad_dir(&scr1Bg, LV_GRAD_DIR_VER);
   lv_style_set_bg_dither_mode(&scr1Bg, LV_DITHER_ERR_DIFF);
+}
+
+float volumeToGain(uint8_t volume)
+{ // Range is 0 to I2S_VOLUME_STEP
+  if (volume == 0)
+    return 0.;
+  else if (volume > uint8_t(I2S_VOLUME_STEP))
+    volume = uint8_t(I2S_VOLUME_STEP);
+  return (float(volume - 1) * gainPerVolumeStep) + I2S_MIN_GAIN;
 }
 
 const char* dowToStr(int dow) {
