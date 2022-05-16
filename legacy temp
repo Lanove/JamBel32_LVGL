@@ -1,0 +1,486 @@
+
+struct TouchCalibrationData {
+  int zeroX;
+  int zeroY;
+  float coefficientX;
+  float coefficientY;
+};
+
+#define YP 15  // must be an analog pin, use "An" notation!
+#define XM 2  // must be an analog pin, use "An" notation!
+#define YM 12   // can be a digital pin
+#define XP 4   // can be a digital pin
+#define XPLATE_RES 245 // Resistance between X+ and X-
+
+TouchScreen ts = TouchScreen(XP, YP, XM, YM, XPLATE_RES);
+TouchCalibrationData calData = { .zeroX = 230,
+                                .zeroY = 430,
+                                .coefficientX = 0.1432,
+                                .coefficientY = 0.1096 };
+TSPoint oldPoint;
+TouchCalibrationData calibrateTouch();
+
+// TouchCalibrationData calibrateTouch() {
+//   static int color;
+//   const int numCalibrationSample = 4;
+//   static int calibrationStage = 0;
+//   static bool messageShowed = false;
+//   static bool calibrationDone = false;
+//   static int zeroX = 0, zeroY = 0;
+//   static float coefficientX = 0, coefficientY = 0;
+//   static int minX = 4096, maxX = 0, minY = 4096, maxY = 0;
+//   static unsigned long intervalMillis = 0;
+//   static unsigned long touchTimer = 0;
+//   static unsigned long delayMillis = 0;
+//   static bool failStage = false;
+//   static bool failReturn = false;
+//   static int calX[numCalibrationSample], calY[numCalibrationSample];
+
+//   const int sx[numCalibrationSample] = { 30,450,70,450 },
+//     sy[numCalibrationSample] = { 30,70,230,300 };
+//   auto resetStaticVar = [](bool wipe) {
+//     calibrationStage = 0;
+//     messageShowed = false;
+//     calibrationDone = false;
+//     minX = 4096, maxX = 0, minY = 4096, maxY = 0;
+//     intervalMillis = 0;
+//     touchTimer = 0;
+//     failStage = false;
+//     failReturn = false;
+//     if (wipe) {
+//       zeroX = 0, zeroY = 0;
+//       coefficientX = 0., coefficientY = 0.;
+//       memset(calX, 0, numCalibrationSample * sizeof(int));
+//       memset(calY, 0, numCalibrationSample * sizeof(int));
+//     }
+//   };
+//   String message;
+
+//   if (calibrationStage == 0) {
+//     if (!messageShowed) { // Show message of calibration stage 0 once
+//       messageShowed = true;
+//       tft.fillScreen(0x0000);
+//       tft.setTextFont(2);
+
+//       message = "Kalibrasi Touchscreen LCD";
+//       tft.setCursor(tft.width() / 2 - tft.textWidth(message) / 2, tft.height() / 2 - tft.fontHeight() * 2);
+//       tft.print(message);
+
+//       message = "Sentuh dan tahan selama 3 detik pojok kiri atas dari LCD (titik merah)";
+//       tft.setCursor(tft.width() / 2 - tft.textWidth(message) / 2, tft.height() / 2 - tft.fontHeight() / 2);
+//       tft.print(message);
+//       tft.fillSmoothCircle(0, 0, 5, TFT_RED);
+//     }
+//     if (millis() - intervalMillis >= 100) { // Loop every 100ms, used for sampling touch and handling failure/success of calibration stage 0
+//       intervalMillis = millis(); // Store current millis to be used on next compare
+//       TSPoint p = ts.getPoint(); // Sample touch (every interval (100ms))
+//       if (failStage) // Used for creating 3 seconds delay to display failed message after failed stage 0
+//         touchTimer += 100;
+//       else { // Display total time touched in second
+//         tft.setCursor(150, tft.height() / 2 + tft.fontHeight() * 2);
+//         tft.printf("Tersentuh selama %.1f Detik", (float)touchTimer / 1000);
+//       }
+//       if (failStage && touchTimer >= 6000) // Reset calibration after 3 seconds of failed stage 0
+//         resetStaticVar(true);
+//       if (p.z > ts.pressureThreshhold) { // If touch is detected
+//         touchTimer += 100; // Increase touchTimer by interval (100) for every detected touch
+
+//         // Determine min max of touch raw coordinate
+//         if (p.x < minX)
+//           minX = p.x;
+//         if (p.x > maxX)
+//           maxX = p.x;
+//         if (p.y < minY)
+//           minY = p.y;
+//         if (p.x > maxY)
+//           maxY = p.y;
+
+//         // If user has touched for 3 seconds then...
+//         if (touchTimer >= 3000) {
+//           // Touch moved too much during touch session, show failed message for 3 seconds and restart calibration
+//           if (minX - maxX > 100 || minX - maxX < -100 || minY - maxY > 100 || minY - maxY < -100) {
+//             if (!failStage) { // Display failed message once
+//               failStage = true;
+//               tft.fillScreen(0x0000);
+//               tft.setTextFont(2);
+//               message = "Pastikan sentuh titik merah pojok kiri atas selama 3 detik";
+//               tft.setCursor(tft.width() / 2 - tft.textWidth(message) / 2, tft.height() / 2 - tft.fontHeight() * 2);
+//               tft.print(message);
+
+//               message = "Dan jangan menyentuh titik yang berbeda pada saat 3 detik itu";
+//               tft.setCursor(tft.width() / 2 - tft.textWidth(message) / 2, tft.height() / 2 - tft.fontHeight() / 2);
+//               tft.print(message);
+//             }
+//           }
+//           // If touch session is valid then proceed to next stage
+//           else {
+//             zeroX = (minX + maxX) >> 1;
+//             zeroY = (minY + maxY) >> 1;
+//             resetStaticVar(false);
+//             delayMillis = millis(); // Set delayMillis to current time, used for delaying next stage touch event by 1 seconds
+//             calibrationStage = 1;
+//             Serial.printf("zeroX %d zeroY %d\n", zeroX, zeroY);
+//           }
+//         }
+//       }
+//     }
+//   }
+//   else if (calibrationStage >= 1 && calibrationStage <= numCalibrationSample) {
+//     if (!messageShowed) { // Show message of calibration stage once
+//       messageShowed = true;
+//       tft.fillScreen(0x0000);
+//       tft.setTextFont(2);
+
+//       if (failReturn) {
+//         message = "Gagal melakukan kalibrasi, coba lagi";
+//         tft.setCursor(tft.width() / 2 - tft.textWidth(message) / 2, tft.height() / 2 - tft.fontHeight() * 3);
+//         tft.print(message);
+//       }
+
+//       message = "Kalibrasi Touchscreen LCD";
+//       tft.setCursor(tft.width() / 2 - tft.textWidth(message) / 2, tft.height() / 2 - tft.fontHeight() * 2);
+//       tft.print(message);
+
+//       message = "Sentuh dan tahan titik merah selama 1 detik";
+//       tft.setCursor(tft.width() / 2 - tft.textWidth(message) / 2, tft.height() / 2 - tft.fontHeight() / 2);
+//       tft.print(message);
+
+//       tft.fillSmoothCircle(sx[calibrationStage - 1], sy[calibrationStage - 1], 5, TFT_RED);
+//     }
+//     if (millis() - delayMillis >= 2000) {
+//       if (millis() - intervalMillis >= 100) { // Loop every 100ms, used for sampling touch and handling failure/success of calibration stage 1
+//         intervalMillis = millis(); // Store current millis to be used on next compare
+//         TSPoint p = ts.getPoint(); // Sample touch (every interval (100ms))
+//         p.x -= zeroX;
+//         if (p.x < 0)
+//           p.x = 0;
+//         p.y -= zeroY;
+//         if (p.y < 0)
+//           p.y = 0;
+//         if (failStage) // Used for creating 3 seconds delay to display failed message after failed stage 1
+//           touchTimer += 100;
+//         else { // Display total time touched in second
+//           tft.setCursor(150, tft.height() / 2 + tft.fontHeight() * 2);
+//           tft.printf("Tersentuh selama %.1f Detik", (float)touchTimer / 1000);
+//         }
+//         if (failStage && touchTimer >= 4000) { // Reset touch session of stage 1 after 3 second of failed stage 1
+//           int tempStage = calibrationStage;
+//           resetStaticVar(false);
+//           delayMillis = millis();
+//           calibrationStage = tempStage;
+//         }
+//         if (p.z > ts.pressureThreshhold) { // If touch is detected
+//           touchTimer += 100; // Increase touchTimer by interval (100) for every detected touch
+
+//           // Determine min max of touch raw coordinate
+//           if (p.x < minX)
+//             minX = p.x;
+//           if (p.x > maxX)
+//             maxX = p.x;
+//           if (p.y < minY)
+//             minY = p.y;
+//           if (p.x > maxY)
+//             maxY = p.y;
+
+//           // If user has touched for 1 seconds then...
+//           if (touchTimer >= 1000) {
+//             // Touch moved too much during touch session, show failed message for 3 seconds and restart calibration
+//             if (minX - maxX > 100 || minX - maxX < -100 || minY - maxY > 100 || minY - maxY < -100) {
+//               if (!failStage) { // Display failed message once
+//                 failStage = true;
+//                 tft.fillScreen(0x0000);
+//                 tft.setTextFont(2);
+//                 message = "Pastikan sentuh titik merah selama 1 detik";
+//                 tft.setCursor(tft.width() / 2 - tft.textWidth(message) / 2, tft.height() / 2 - tft.fontHeight() * 2);
+//                 tft.print(message);
+
+//                 message = "Dan jangan menyentuh titik yang berbeda pada saat 1 detik itu";
+//                 tft.setCursor(tft.width() / 2 - tft.textWidth(message) / 2, tft.height() / 2 - tft.fontHeight() / 2);
+//                 tft.print(message);
+//               }
+//             }
+//             // If touch session is valid then proceed to next stage
+//             else {
+//               int tempStage = calibrationStage;
+//               calX[calibrationStage - 1] = (minX + maxX) >> 1;
+//               calY[calibrationStage - 1] = (minY + maxY) >> 1;
+//               if (calibrationStage >= numCalibrationSample) {
+//                 float avgCoeffX = 0.;
+//                 float avgCoeffY = 0.;
+//                 float minCoeffX = 1000.;
+//                 float minCoeffY = 1000.;
+//                 float maxCoeffX = 0.;
+//                 float maxCoeffY = 0.;
+//                 for (int i = 0; i < numCalibrationSample; i++) {
+//                   float coeffX = float(float(sx[i]) / float(calX[i]));
+//                   float coeffY = float(float(sy[i]) / float(calY[i]));
+//                   if (coeffX < minCoeffX)
+//                     minCoeffX = coeffX;
+//                   if (coeffX > maxCoeffX)
+//                     maxCoeffX = coeffX;
+//                   if (coeffY < minCoeffY)
+//                     minCoeffY = coeffY;
+//                   if (coeffY > maxCoeffY)
+//                     maxCoeffY = coeffY;
+//                   avgCoeffX += coeffX;
+//                   avgCoeffY += coeffY;
+//                   Serial.printf("calX[%d] %d -- %.4f\n", i, calX[i], coeffX);
+//                   Serial.printf("calY[%d] %d -- %.4f\n", i, calY[i], coeffY);
+//                 }
+//                 avgCoeffX /= numCalibrationSample;
+//                 avgCoeffY /= numCalibrationSample;
+//                 Serial.printf("avgX : %.4f\navgY : %.4f\n", avgCoeffX, avgCoeffY);
+//                 Serial.printf("minX %.4f\nmaxX %.4f\nminY %.4f\nminY %.4f\n", minCoeffX, maxCoeffX, minCoeffY, maxCoeffY);
+//                 if (minCoeffX - maxCoeffX > 0.05 || minCoeffX - maxCoeffX < -0.05 || minCoeffY - maxCoeffY > 0.05 || minCoeffY - maxCoeffY < -0.05) {
+//                   resetStaticVar(false);
+//                   delayMillis = millis();
+//                   calibrationStage = 1;
+//                   failReturn = true;
+//                 }
+//                 else {
+//                   delayMillis = millis();
+//                   calibrationStage = tempStage + 1;
+//                   coefficientX = avgCoeffX;
+//                   coefficientY = avgCoeffY;
+//                 }
+//               }
+//               else {
+//                 resetStaticVar(false);
+//                 delayMillis = millis();
+//                 calibrationStage = tempStage + 1;
+//               }
+//             }
+//           }
+//         }
+//       }
+//     }
+//   }
+//   else if (calibrationStage == numCalibrationSample + 1) {
+//     TSPoint p = ts.getPoint(); // Sample touch (every interval (100ms))
+//     if (p.z > ts.pressureThreshhold) {
+//       p.x = float(p.x - zeroX) * coefficientX;
+//       p.y = float(p.y - zeroY) * coefficientY;
+//       tft.drawPixel(p.x, p.y, color);
+//       color += 155;
+//     }
+//   }
+//   if (calibrationDone) {
+//     int tempZeroX = zeroX;
+//     int tempZeroY = zeroY;
+//     float tempCoefficientX = coefficientX;
+//     float tempCoefficientY = coefficientY;
+//     resetStaticVar(true);
+//     return TouchCalibrationData{ tempZeroX,tempZeroY,tempCoefficientX,tempCoefficientY };
+//   }
+//   else
+//     return TouchCalibrationData{ 0xFFFF,0xFFFF,3.14,3.14 }; // Data is not ready
+// }
+
+
+static lv_disp_draw_buf_t draw_buf;
+static lv_color_t buf[screenWidth * 10];
+lv_disp_drv_t disp_drv;
+lv_indev_drv_t indev_drv;
+
+void printLVGLDebug(const char* buf);
+lv_obj_t* kb;
+static void ta_event_cb(lv_event_t* e)
+{
+  lv_event_code_t code = lv_event_get_code(e);
+  lv_obj_t* ta = lv_event_get_target(e);
+  if (code == LV_EVENT_FOCUSED) {
+    lv_keyboard_set_textarea(kb, ta);
+    lv_obj_clear_flag(kb, LV_OBJ_FLAG_HIDDEN);
+  }
+
+  if (code == LV_EVENT_DEFOCUSED) {
+    lv_keyboard_set_textarea(kb, NULL);
+    lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
+void lv_example_keyboard_1(void)
+{
+  /*Create a keyboard to use it with an of the text areas*/
+  kb = lv_keyboard_create(lv_scr_act());
+
+  /*Create a text area. The keyboard will write here*/
+  lv_obj_t* ta;
+  ta = lv_textarea_create(lv_scr_act());
+  lv_obj_align(ta, LV_ALIGN_TOP_LEFT, 10, 10);
+  lv_obj_add_event_cb(ta, ta_event_cb, LV_EVENT_ALL, kb);
+  lv_textarea_set_placeholder_text(ta, "Hello");
+  lv_obj_set_size(ta, 140, 80);
+
+  ta = lv_textarea_create(lv_scr_act());
+  lv_obj_align(ta, LV_ALIGN_TOP_RIGHT, -10, 10);
+  lv_obj_add_event_cb(ta, ta_event_cb, LV_EVENT_ALL, kb);
+  lv_obj_set_size(ta, 140, 80);
+
+  lv_keyboard_set_textarea(kb, ta);
+}
+
+void my_disp_flush(lv_disp_drv_t* disp, const lv_area_t* area, lv_color_t* color_p)
+{
+  uint32_t w = (area->x2 - area->x1 + 1);
+  uint32_t h = (area->y2 - area->y1 + 1);
+
+   tft.startWrite();
+   tft.setAddrWindow( area->x1, area->y1, w, h );
+   //tft.pushColors( ( uint16_t * )&color_p->full, w * h, true );
+   tft.writePixels((lgfx::rgb565_t *)&color_p->full, w * h);
+   tft.endWrite();
+
+  lv_disp_flush_ready(disp);
+}
+
+void my_touchpad_read(lv_indev_drv_t* indev_driver, lv_indev_data_t* data)
+{
+  uint16_t touchX, touchY;
+  bool touched = tft.getTouch(&touchX, &touchY);
+  if (!touched)
+  {
+    data->state = LV_INDEV_STATE_REL;
+  }
+  else
+  {
+    data->state = LV_INDEV_STATE_PR;
+
+    /*Set the coordinates*/
+    data->point.x = touchX;
+    data->point.y = touchY;
+
+    Serial.print("Data x ");
+    Serial.println(touchX);
+
+    Serial.print("Data y ");
+    Serial.println(touchY);
+  }
+}
+
+void setup(void) {
+  Serial.begin(115200);
+  Serial.println("starting");
+  // read_efuse_vref(void)
+  lv_init();
+
+#if LV_USE_LOG != 0
+  lv_log_register_print_cb(printLVGLDebug); /* register print function for debugging */
+#endif
+
+  tft.init();
+  tft.setRotation(3);
+  tft.fillScreen((0x0000));
+  uint16_t params[8];
+  tft.calibrateTouch(params, TFT_WHITE, TFT_BLACK);
+  tft.setTouchCalibrate(params);
+  for (int i = 0;i < 8;i++) {
+    Serial.println(params[i]);
+  }
+  lv_disp_draw_buf_init(&draw_buf, buf, NULL, screenWidth * 10);
+
+  /*Initialize the display*/
+  static lv_disp_drv_t disp_drv;
+  lv_disp_drv_init(&disp_drv);
+  /*Change the following line to your display resolution*/
+  disp_drv.hor_res = screenWidth;
+  disp_drv.ver_res = screenHeight;
+  disp_drv.flush_cb = my_disp_flush;
+  disp_drv.draw_buf = &draw_buf;
+  lv_disp_drv_register(&disp_drv);
+
+  /*Initialize the (dummy) input device driver*/
+  static lv_indev_drv_t indev_drv;
+  lv_indev_drv_init(&indev_drv);
+  indev_drv.type = LV_INDEV_TYPE_POINTER;
+  indev_drv.read_cb = my_touchpad_read;
+  lv_indev_drv_register(&indev_drv);
+  lv_example_keyboard_1();
+}
+
+void loop() {
+  lv_timer_handler(); /* let the GUI do its work */
+  delay(1);
+}
+
+static lv_disp_draw_buf_t draw_buf;
+static lv_color_t buf[screenWidth * 10];
+lv_disp_drv_t disp_drv;
+lv_indev_drv_t indev_drv;
+
+void printLVGLDebug(const char* buf);
+lv_obj_t* kb;
+static void ta_event_cb(lv_event_t* e)
+{
+  lv_event_code_t code = lv_event_get_code(e);
+  lv_obj_t* ta = lv_event_get_target(e);
+  if (code == LV_EVENT_FOCUSED) {
+    lv_keyboard_set_textarea(kb, ta);
+    lv_obj_clear_flag(kb, LV_OBJ_FLAG_HIDDEN);
+  }
+
+  if (code == LV_EVENT_DEFOCUSED) {
+    lv_keyboard_set_textarea(kb, NULL);
+    lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
+void lv_example_keyboard_1(void)
+{
+  /*Create a keyboard to use it with an of the text areas*/
+  kb = lv_keyboard_create(lv_scr_act());
+
+  /*Create a text area. The keyboard will write here*/
+  lv_obj_t* ta;
+  ta = lv_textarea_create(lv_scr_act());
+  lv_obj_align(ta, LV_ALIGN_TOP_LEFT, 10, 10);
+  lv_obj_add_event_cb(ta, ta_event_cb, LV_EVENT_ALL, kb);
+  lv_textarea_set_placeholder_text(ta, "Hello");
+  lv_obj_set_size(ta, 140, 80);
+
+  ta = lv_textarea_create(lv_scr_act());
+  lv_obj_align(ta, LV_ALIGN_TOP_RIGHT, -10, 10);
+  lv_obj_add_event_cb(ta, ta_event_cb, LV_EVENT_ALL, kb);
+  lv_obj_set_size(ta, 140, 80);
+
+  lv_keyboard_set_textarea(kb, ta);
+}
+
+void my_disp_flush(lv_disp_drv_t* disp, const lv_area_t* area, lv_color_t* color_p)
+{
+  uint32_t w = (area->x2 - area->x1 + 1);
+  uint32_t h = (area->y2 - area->y1 + 1);
+
+   tft.startWrite();
+   tft.setAddrWindow( area->x1, area->y1, w, h );
+   //tft.pushColors( ( uint16_t * )&color_p->full, w * h, true );
+   tft.writePixels((lgfx::rgb565_t *)&color_p->full, w * h);
+   tft.endWrite();
+
+  lv_disp_flush_ready(disp);
+}
+
+void my_touchpad_read(lv_indev_drv_t* indev_driver, lv_indev_data_t* data)
+{
+  uint16_t touchX, touchY;
+  bool touched = tft.getTouch(&touchX, &touchY);
+  if (!touched)
+  {
+    data->state = LV_INDEV_STATE_REL;
+  }
+  else
+  {
+    data->state = LV_INDEV_STATE_PR;
+
+    /*Set the coordinates*/
+    data->point.x = touchX;
+    data->point.y = touchY;
+
+    Serial.print("Data x ");
+    Serial.println(touchX);
+
+    Serial.print("Data y ");
+    Serial.println(touchY);
+  }
+}
+

@@ -1,0 +1,19 @@
+{
+    "files.associations": {
+        "*.ino": "cpp",
+        "*.tcc": "cpp",
+        "fstream": "cpp",
+        "lv_demo_widgets.h": "c",
+        "lv_example_widgets.h": "c",
+        "unordered_map": "cpp",
+        "istream": "cpp",
+        "lv_demo.h": "c",
+        "lv_demo_benchmark.h": "c",
+        "lvgl.h": "c",
+        "map": "cpp",
+        "string": "cpp",
+        "chrono": "cpp",
+        "random": "cpp",
+        "limits": "cpp"
+    }
+}
