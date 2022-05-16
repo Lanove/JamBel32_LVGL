@@ -33,17 +33,17 @@ void setup(void) {
   else
     log_d("SD.begin() failed");
 
-  log_d("Inizializing FS...\n");
-  if (ESPSYS_FS.begin())
-    log_d("FS OK!\nTotal Bytes : %llu\nUsed Bytes : %llu\nFree Bytes : %llu\n", ESPSYS_FS.totalBytes(), ESPSYS_FS.usedBytes(), (ESPSYS_FS.totalBytes() - ESPSYS_FS.usedBytes()));
-  else
-    log_d("FS Fail!\n");
+  // log_d("Inizializing FS...\n");
+  // if (ESPSYS_FS.begin())
+  //   log_d("FS OK!\nTotal Bytes : %llu\nUsed Bytes : %llu\nFree Bytes : %llu\n", ESPSYS_FS.totalBytes(), ESPSYS_FS.usedBytes(), (ESPSYS_FS.totalBytes() - ESPSYS_FS.usedBytes()));
+  // else
+  //   log_d("FS Fail!\n");
 
   Wire.begin(int(I2C_SDA), int(I2C_SCL), I2C_FREQ);
   if (!rtc.begin())
     Serial.println("RTC not found!");
   if (rtc.lostPower())
-    rtc.adjust(DateTime(2022, 4, 15, 13, 0, 0));
+    rtc.adjust(DateTime(1900, 0, 0, 0, 0, 0));
 
   now = rtc.now();
   belManual_load(belManual, belManual_len);
@@ -159,21 +159,21 @@ void loadMainScreen() {
 
   uint16_t tbel = (now.hour() * 100) + now.minute();
   for (int i = 0; i < jw_used.jumlahBel;i++) {
-    printf("i %d tbel %d jadwalBel[%d] %d\n", i, tbel, i, jw_used.jadwalBel[i]);
+    log_d("i %d tbel %d jadwalBel[%d] %d\n", i, tbel, i, jw_used.jadwalBel[i]);
     if (tbel < jw_used.jadwalBel[i]) {
       nextBelIndex = i;
-      printf("nextBelIndex reg %d\n", nextBelIndex);
+      log_d("nextBelIndex reg %d\n", nextBelIndex);
       break;
     }
     if (i == jw_used.jumlahBel - 1 && tbel >= jw_used.jadwalBel[i]) {
       nextBelIndex = 255;
-      printf("nextBelIndex max %d\n", nextBelIndex);
+      log_d("nextBelIndex max %d\n", nextBelIndex);
       break;
     }
   }
   if (jw_used.jumlahBel == 0)
     nextBelIndex = 255;
-  printf("nextBelIndex %d\n", nextBelIndex);
+  log_d("nextBelIndex %d\n", nextBelIndex);
 
   if (nextBelIndex == 255) { // No more bell for today
     lv_label_set_text(mainScreen_nextBellClock, "");
@@ -279,7 +279,7 @@ void tabOne() {
     lv_obj_set_height(lv_obj_get_child(button, 0), lv_pct(100));
     lv_obj_add_event_cb(button, [](lv_event_t* e) {
       static WidgetParameterData belManual_wpd;
-      static char belManual_message[90];
+      static char belManual_message[90] = {0};
       lv_obj_t* btn = lv_event_get_target(e);
       lv_obj_t* btnLabel = lv_obj_get_child(btn, 0);
       sprintf(belManual_message, "Apakah anda yakin ingin mengaktifkan bel manual %s?", lv_label_get_text(btnLabel));
@@ -289,7 +289,7 @@ void tabOne() {
     lv_obj_add_event_cb(button, [](lv_event_t* e) {
       WidgetParameterData* wpd = (WidgetParameterData*)lv_event_get_param(e);
       // First button index is 2
-      printf("%d\n", lv_obj_get_index(wpd->issuer));
+      log_d("%d\n", lv_obj_get_index(wpd->issuer));
       }, LV_EVENT_REFRESH, NULL);
     if (!belManual[i].enabled)
       lv_obj_add_state(button, LV_STATE_DISABLED);
@@ -440,10 +440,15 @@ void tabThree() {
       int ta1 = atoi(lv_textarea_get_text(lv_obj_get_child(modal, 1))),
         ta2 = atoi(lv_textarea_get_text(lv_obj_get_child(modal, 3))),
         ta3 = atoi(lv_textarea_get_text(lv_obj_get_child(modal, 5)));
-      if (issuerIdx == 0)
-        printf("Jam %d:%d:%d\n", ta1, ta2, ta3);
-      else
-        printf("Tanggal %d/%d/%d\n", ta1, ta2, ta3);
+      now = rtc.now();
+      if (issuerIdx == 0) {
+        rtc.adjust(DateTime(now.year(), now.month(), now.day(), ta1, ta2, ta3));
+        log_d("Jam %d:%d:%d", ta1, ta2, ta3);
+      }
+      else {
+        rtc.adjust(DateTime(ta3, ta2, ta1, now.hour(), now.minute(), now.second()));
+        log_d("Tanggal %d/%d/%d", ta1, ta2, ta3);
+      }
       lv_obj_del(overlay);
       }, LV_EVENT_CLICKED, issuer);
 
@@ -482,7 +487,7 @@ void tabelJadwalHariIni() {
   // Create the table for current tabel jadwal used for this day
   lv_obj_t* secondBox = lv_obj_get_child(tab1, 1);
   if (lv_obj_get_child(secondBox, 3) != NULL && lv_obj_get_child(secondBox, 3) == jw_lv_list_table) {
-    printf("deleting jw_lv_list_table because it already existed\n");
+    log_d("deleting jw_lv_list_table because it already existed");
     lv_obj_del(jw_lv_list_table);
   }
   jw_lv_list_table = lv_table_create(secondBox);
@@ -520,7 +525,7 @@ void tj_table_build() {
   static const char* tjListHeader[] = { "#","Nama Template", "Tipe", "Aksi" };
   lv_obj_t* boxTab2 = lv_obj_get_child(tab2, 0);
   if (lv_obj_get_child(boxTab2, 2) != NULL && lv_obj_get_child(boxTab2, 2) == tj_lv_list_table) {
-    printf("deleting tj_lv_list_table because it already existed\n");
+    log_d("deleting tj_lv_list_table because it already existed");
     lv_obj_del(tj_lv_list_table);
   }
   tj_lv_list_table = lv_table_create(boxTab2); // Uses table to save memory
@@ -561,9 +566,11 @@ void tj_table_build() {
     lv_table_add_cell_ctrl(tj_lv_list_table, 1, 1, LV_TABLE_CELL_CTRL_MERGE_RIGHT);
     lv_table_add_cell_ctrl(tj_lv_list_table, 1, 2, LV_TABLE_CELL_CTRL_MERGE_RIGHT);
   }
-  lv_obj_add_event_cb(tj_lv_list_table, tj_table_draw_cb, LV_EVENT_DRAW_PART_END, NULL); // Callback used to draw the pseudo button on the table (table can't draw object)
-  lv_obj_add_event_cb(tj_lv_list_table, tj_table_actionBtn_cb, LV_EVENT_VALUE_CHANGED, NULL); // Callback for action button click
-  lv_obj_add_event_cb(tj_lv_list_table, tj_table_refresh_cb, LV_EVENT_REFRESH, NULL); // Callback for action button click
+  else {
+    lv_obj_add_event_cb(tj_lv_list_table, tj_table_draw_cb, LV_EVENT_DRAW_PART_END, NULL); // Callback used to draw the pseudo button on the table (table can't draw object)
+    lv_obj_add_event_cb(tj_lv_list_table, tj_table_actionBtn_cb, LV_EVENT_VALUE_CHANGED, NULL); // Callback for action button click
+    lv_obj_add_event_cb(tj_lv_list_table, tj_table_refresh_cb, LV_EVENT_REFRESH, NULL); // Callback for action button click
+  }
 }
 
 void tj_table_refresh_cb(lv_event_t* e) {
@@ -959,9 +966,13 @@ bool belManual_store(BelManual* bm_target, size_t len) {
   return true;
 }
 bool jadwalHari_load(TemplateJadwal* tj_target, JadwalHari* jwh_target, int num) {
+  if (strlen(tj_target->name) == 0) {
+    log_e("tj_target->name mustn't empty!%s");
+    return false;
+  }
   char tempPath[128];
   sprintf(tempPath, PATH_TJ"%s/%d", tj_target->name, num);
-  log_d("load jh %s\n", tempPath);
+  log_d("load jh %s", tempPath);
   File file = ESPSYS_FS.open(tempPath, "r");
   if (!file) {
     file.close();
@@ -975,7 +986,7 @@ bool jadwalHari_load(TemplateJadwal* tj_target, JadwalHari* jwh_target, int num)
 bool jadwalHari_store(TemplateJadwal* tj_target, JadwalHari* jwh_target, int num) {
   char tempPath[128];
   sprintf(tempPath, PATH_TJ"%s/%d", tj_target->name, num);
-  log_d("store jh %s\n", tempPath);
+  log_d("store jh %s", tempPath);
   File file = ESPSYS_FS.open(tempPath, "w+");
   if (!file) {
     file.close();
@@ -988,7 +999,7 @@ bool jadwalHari_store(TemplateJadwal* tj_target, JadwalHari* jwh_target, int num
 }
 bool templateJadwal_load(TemplateJadwal* tj_target, const char* path) {
   File file = ESPSYS_FS.open(path, "r");
-  log_d("load tj at %s\n", path);
+  log_d("load tj at %s", path);
   if (!file) {
     file.close();
     log_e("Error opening file!");
@@ -996,13 +1007,13 @@ bool templateJadwal_load(TemplateJadwal* tj_target, const char* path) {
   }
   file.readBytes((char*)tj_target, sizeof(TemplateJadwal));
   file.close();
-  log_d("loaded %s type : %s\n", tj_target->name, tj_target->tipeJadwal == TJ_HARIAN ? "harian" : "mingguan");
+  log_d("loaded %s type : %s", tj_target->name, tj_target->tipeJadwal == TJ_HARIAN ? "harian" : "mingguan");
   return true;
 }
 bool templateJadwal_store(TemplateJadwal* tj_target) {
   char path[64];
   sprintf(path, PATH_TJ"%s.bin", tj_target->name);
-  log_d("store tj at %s\n", path);
+  log_d("store tj at %s", path);
   File file = ESPSYS_FS.open(path, "w+");
   if (!file) {
     file.close();
@@ -1017,7 +1028,7 @@ bool templateJadwal_activeName_update(const char* activeName) {
   char temp[33];
   strcpy(temp, activeName);
   File file = ESPSYS_FS.open(PATH_ESPSYS"tj_active_name.bin", "w+");
-  log_d("updating tj_active_name.bin to %s\n", activeName);
+  log_d("updating tj_active_name.bin to %s", activeName);
   if (!file) {
     file.close();
     log_e("Error opening file!");
@@ -1030,7 +1041,7 @@ bool templateJadwal_activeName_update(const char* activeName) {
 }
 bool templateJadwal_activeName_load() {
   File file = ESPSYS_FS.open(PATH_ESPSYS"tj_active_name.bin", "r");
-  log_d("loading tj_active_name.bin\n");
+  log_d("loading tj_active_name.bin");
   if (!file) {
     file.close();
     log_e("Error opening file!");
@@ -1038,7 +1049,7 @@ bool templateJadwal_activeName_load() {
   }
   file.readBytes((char*)tj_active_name, sizeof(TemplateJadwal::name));
   file.close();
-  printf("tj_active_name.bin loaded : %s\n", tj_active_name);
+  log_d("tj_active_name.bin loaded : %s", tj_active_name);
   return true;
 }
 bool templateJadwal_list_load() {
@@ -1059,11 +1070,11 @@ bool templateJadwal_list_load() {
   {
     if (!file.isDirectory()) {
       templateJadwal_load(&tj_lists[tjIndex], file.path());
-      log_d("compare loaded %s to tj_active_name %s\n\n", tj_lists[tjIndex].name, tj_active_name);
+      log_d("compare loaded %s to tj_active_name %s", tj_lists[tjIndex].name, tj_active_name);
       if (strcmp(tj_lists[tjIndex].name, tj_active_name) == 0) {
         templateJadwal_changeUsedTJ(tj_lists[tjIndex], false, false);
         tjUsedFound = true;
-        log_d("tj_used name %s type %d\n\n", tj_used.name, tj_used.tipeJadwal);
+        log_d("tj_used name %s type %d", tj_used.name, tj_used.tipeJadwal);
       }
       tjIndex++;
     }
@@ -1073,18 +1084,18 @@ bool templateJadwal_list_load() {
   root.close();
   tj_total_active = tjIndex;
   if (!tjUsedFound) {
-    log_d("Can't find active tj\n");
+    log_d("Can't find active tj");
     templateJadwal_changeUsedTJ(tj_lists[tjIndex - 1], false, false);
-    log_d("tj_active set to %s %d\n", tj_used.name, tj_used.tipeJadwal);
+    log_d("tj_active set to %s %d", tj_used.name, tj_used.tipeJadwal);
     templateJadwal_activeName_update(tj_used.name);
   }
   return true;
 }
 bool templateJadwal_create(TemplateJadwal* tj_target) {
-  printf("\n\nTemplateJadwal Create Dummy\n");
+  log_d("\nTemplateJadwal Create Dummy");
   char path[64];
   sprintf(path, PATH_TJ"%s.bin", tj_target->name);
-  log_d("Create binary at %s\n", path);
+  log_d("Create binary at %s", path);
   File file = ESPSYS_FS.open(path, "w+");
   if (!file) {
     file.close();
@@ -1094,14 +1105,14 @@ bool templateJadwal_create(TemplateJadwal* tj_target) {
   file.write((uint8_t*)tj_target, sizeof(TemplateJadwal));
   file.close();
   sprintf(path, PATH_TJ"%s", tj_target->name);
-  log_d("Create dir at %s\n", path);
+  log_d("Create dir at %s", path);
   if (ESPSYS_FS.mkdir(path) == -1) {
     log_e("Error : %s\n", strerror(errno));
     return false;
   }
   for (int i = 0; i < 7; i++) {
     sprintf(path, PATH_TJ"%s/%d", tj_target->name, i);
-    log_d("Create JW binary at %s\n", path);
+    log_d("Create JW binary at %s", path);
     file = ESPSYS_FS.open(path, "w+");
     if (!file) {
       file.close();
@@ -1128,21 +1139,21 @@ bool templateJadwal_changeUsedTJ(TemplateJadwal to, bool refreshElements, bool u
   return true;
 }
 bool templateJadwal_delete(TemplateJadwal* tj_target) {
-  log_d("\n\nTemplateJadwal Delete\n");
+  log_d("\nTemplateJadwal Delete");
   char path[64];
   sprintf(path, PATH_TJ"%s", tj_target->name);
-  log_d("Delete binary folder at %s\n", path);
+  log_d("Delete binary folder at %s", path);
   if (!ESPSYS_FS.rmdir(path)) {
-    log_e("Error removing folder!\n");
+    log_e("Error removing folder!");
     return false;
   }
   sprintf(path, PATH_TJ"%s.bin", tj_target->name);
-  log_d("Delete binary at %s\n", path);
+  log_d("Delete binary at %s", path);
   if (!ESPSYS_FS.remove(path)) {
-    log_e("Error : %s\n", strerror(errno));
+    log_e("Error : %s", strerror(errno));
     return false;
   }
-  log_d("OK\n\n");
+  log_d("OK\n");
   templateJadwal_list_load(); // Reload the lists after success delete
   return true;
 }
@@ -1158,6 +1169,7 @@ void Traverser::createTraverser(lv_obj_t* issuer, const char* dir, bool build) {
     lv_obj_set_size(modal, lv_pct(100), lv_pct(100)); // Most fit number
     lv_obj_align(modal, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_pad_all(modal, 0, 0);
+    lv_obj_clear_flag(modal, LV_OBJ_FLAG_SCROLL_MOMENTUM);
     modalTitle = lv_label_create(modal);
     lvc_label_init(modalTitle, &lv_font_montserrat_20, LV_ALIGN_TOP_LEFT, 13, 13);
     lv_label_set_text_static(modalTitle, "Pilih File");
@@ -1251,7 +1263,7 @@ void Traverser::createTraverser(lv_obj_t* issuer, const char* dir, bool build) {
       if (isDir)
         lv_table_set_cell_value_fmt(table, rowLen, 2, " ");
       else {
-        char sizestr[16];
+        char sizestr[16] = { 0 };
         sprintf(sizestr, "%.1f %s", size < 1024 ? float(size) : size < 1048576 ? float(size) / 1024. : float(size) / 1048576., size < 1024 ? "B" : size < 1048576 ? "KB" : "MB");
         lv_table_set_cell_value_fmt(table, rowLen, 2, sizestr); // Somehow the table build-in format can't take float, so we buffer it with another string
       }
@@ -1265,17 +1277,19 @@ void Traverser::createTraverser(lv_obj_t* issuer, const char* dir, bool build) {
   lv_obj_add_event_cb(table, traverserTableDrawEventCallback, LV_EVENT_DRAW_PART_END, NULL); // Callback used to draw the pseudo button on the table (table can't draw object)
   lv_obj_add_event_cb(table, traverserActionButtonClicked, LV_EVENT_VALUE_CHANGED, NULL); // Callback for traverseActionButton click
 }
-
 void Traverser::traverseBack(lv_event_t* event) {
   if (!exist)
     return;
-  char buffer[TRAVERSER_MAX_TRAVERSING_LEN];
+  char buffer[TRAVERSER_MAX_TRAVERSING_LEN] = { 0 };
   char* pLastSlash = strrchr(traverseDirBuffer, '/');
   int lastSlashIdx = pLastSlash - traverseDirBuffer;
   lastSlashIdx = lastSlashIdx < TRAVERSER_MAX_TRAVERSING_LEN ? lastSlashIdx : TRAVERSER_MAX_TRAVERSING_LEN; // Get the index of the last slash "/"
+  log_d("traverseDirBuffer %s\nlastSlashidx %d", traverseDirBuffer, lastSlashIdx);
   strncpy(buffer, traverseDirBuffer, lastSlashIdx == 0 ? 1 : lastSlashIdx); // Copy just until the index of the last slash "/" to chop the last directory
+  log_d("buffer %s", buffer);
   // Copy the chopped back one directory string to traverseDirBuffer
   strcpy(traverseDirBuffer, buffer);
+  log_d("traversedBack %s", traverseDirBuffer);
 
   lv_label_set_text_static(traversePathLabel, traverseDirBuffer); // Store/update new traversePath into the label
 
@@ -1283,7 +1297,6 @@ void Traverser::traverseBack(lv_event_t* event) {
   lv_obj_del(traverseBox);
   createTraverser(traverserIssuer, traverseDirBuffer, false);
 }
-
 void Traverser::traverserActionButtonClicked(lv_event_t* e) {
   if (!exist)
     return;
@@ -1320,7 +1333,6 @@ void Traverser::traverserActionButtonClicked(lv_event_t* e) {
     }
   }
 }
-
 void Traverser::traverserTableDrawEventCallback(lv_event_t* e) {
   if (!exist)
     return;
@@ -1368,7 +1380,7 @@ void TemplateJadwalBuilder::create(int row) {
   tj_target = createNew ? &tj_temp : &tj_lists[row - 1];
   strcpy(tj_oldName, createNew ? "new" : lv_table_get_cell_value(tj_lv_list_table, row, 1));
 
-  printf("loaded %s %d/%s\n", tj_target->name, tj_target->tipeJadwal, tj_target->tipeJadwal == TJ_MINGGUAN ? "Mingguan" : "Harian");
+  log_d("loaded %s %d/%s", tj_target->name, tj_target->tipeJadwal, tj_target->tipeJadwal == TJ_MINGGUAN ? "Mingguan" : "Harian");
 
   btj_overlay = lvc_create_overlay();
 
@@ -1378,6 +1390,7 @@ void TemplateJadwalBuilder::create(int row) {
   btj_modal = lv_obj_create(btj_overlay);
   lv_obj_set_size(btj_modal, lv_pct(100), lv_pct(100));
   lv_obj_set_style_pad_all(btj_modal, 0, 0);
+  lv_obj_clear_flag(btj_modal, LV_OBJ_FLAG_SCROLL_MOMENTUM);
 
   btj_modal_header = lv_label_create(btj_modal);
   lvc_label_init(btj_modal_header, &lv_font_montserrat_20, LV_ALIGN_TOP_LEFT, 15, 15);
@@ -1413,32 +1426,32 @@ void TemplateJadwalBuilder::create(int row) {
   btj_modal_saveBtn = lv_btn_create(btj_modal);
   lvc_btn_init(btj_modal_saveBtn, "Simpan", LV_ALIGN_TOP_RIGHT, -100, 15);
   lv_obj_add_event_cb(btj_modal_saveBtn, [](lv_event_t* e) {
-    printf("\n\nSaving TJ\n\n");
+    log_d("Saving TJ");
     if (strlen(lv_textarea_get_text(btj_modal_tjNameTextArea)) == 0) {
       modal_create_alert("Nama tidak boleh kosong!", "Gagal!", &lv_font_montserrat_20, &lv_font_montserrat_14, bs_white, bs_dark, bs_danger);
       return;
     }
     strcpy(tj_target->name, lv_textarea_get_text(btj_modal_tjNameTextArea));
-    printf("oldname %s usedname %s targetname %s\n", tj_oldName, tj_used.name, tj_target->name);
+    log_d("oldname %s usedname %s targetname %s", tj_oldName, tj_used.name, tj_target->name);
     if (!changed) {
       modal_create_alert("Tidak ada perubahan dalam template jadwal!", "Peringatan!");
       return;
     }
     if (strcmp(tj_oldName, tj_target->name) != 0) { // TemplateJadwal is renamed, so rename the binary and folder for the specified TemplateJadwal
       bool updateUsedTJ = strcmp(tj_oldName, tj_used.name) == 0;
-      char pathFrom[64];
-      char pathTo[64];
+      char pathFrom[64] = { 0 };
+      char pathTo[64] = { 0 };
       sprintf(pathFrom, PATH_TJ"%s.bin", tj_oldName);
       sprintf(pathTo, PATH_TJ"%s.bin", tj_target->name);
-      printf("rename file from %s to %s\n", pathFrom, pathTo);
-      if (rename(pathFrom, pathTo) != 0) {
+      log_d("rename file from %s to %s", pathFrom, pathTo);
+      if (!ESPSYS_FS.rename(pathFrom, pathTo)) {
         modal_create_alert("Gagal menyimpan template jadwal!\nGagal rename file biner", "Gagal!", &lv_font_montserrat_20, &lv_font_montserrat_14, bs_white, bs_dark, bs_danger);
         return;
       }
       sprintf(pathFrom, PATH_TJ"%s", tj_oldName);
       sprintf(pathTo, PATH_TJ"%s", tj_target->name);
-      printf("rename folder from %s to %s\n", pathFrom, pathTo);
-      if (rename(pathFrom, pathTo) != 0) {
+      log_d("rename folder from %s to %s", pathFrom, pathTo);
+      if (!ESPSYS_FS.rename(pathFrom, pathTo)) {
         modal_create_alert("Gagal menyimpan template jadwal!\nGagal rename folder biner", "Gagal!", &lv_font_montserrat_20, &lv_font_montserrat_14, bs_white, bs_dark, bs_danger);
         return;
       }
@@ -1457,7 +1470,7 @@ void TemplateJadwalBuilder::create(int row) {
     else {
       modal_create_alert("Sukses menyimpan template jadwal!", "Sukses", &lv_font_montserrat_20, &lv_font_montserrat_14, bs_white, bs_dark, bs_success);
 
-      char tempName[FS_MAX_NAME_LEN];
+      char tempName[FS_MAX_NAME_LEN] = { 0 };
       strcpy(tempName, tj_target->name);
       templateJadwal_list_load(); // Reload the tj_list because one of TemplateJadwal is changed
       for (int i = 0; i < TJ_MAX_LEN;i++) { // Make sure the pointer for tj_target is still pointing to the edited TemplateJadwal
@@ -1470,7 +1483,7 @@ void TemplateJadwalBuilder::create(int row) {
       tj_table_build(); // Reload the template jadwal list on tab two
       tabelJadwalHariIni(); // Update tabelJadwalHariIni on tab one just in case the tabel bel is changed
     }
-    printf("\n\nDone Saving TJ\n\n");
+    log_d("Done Saving TJ");
     }, LV_EVENT_CLICKED, NULL);
 
   // Textarea for TemplateJadwal name
@@ -1930,17 +1943,17 @@ const char* dowToStr(int dow) {
 }
 
 const char* monthToStr(int month) {
-  return (month == 0) ? "Januari" :
-    (month == 1) ? "Februari" :
-    (month == 2) ? "Maret" :
-    (month == 3) ? "April" :
-    (month == 4) ? "Mei" :
-    (month == 5) ? "Juni" :
-    (month == 6) ? "Juli" :
-    (month == 7) ? "Agustus" :
-    (month == 8) ? "September" :
-    (month == 9) ? "Oktober" :
-    (month == 10) ? "November" : "Desember";
+  return (month == 1) ? "Januari" :
+    (month == 2) ? "Februari" :
+    (month == 3) ? "Maret" :
+    (month == 4) ? "April" :
+    (month == 5) ? "Mei" :
+    (month == 6) ? "Juni" :
+    (month == 7) ? "Juli" :
+    (month == 8) ? "Agustus" :
+    (month == 9) ? "September" :
+    (month == 10) ? "Oktober" :
+    (month == 11) ? "November" : "Desember";
 }
 
 uint8_t strToDow(const char* str) {

@@ -21,8 +21,9 @@
                                                        : TYPE == CARD_UNKNOWN ? "UNKNOWN" \
                                                                               : ""
 
-#define PATH_ESPSYS "/"
-#define PATH_TJ "espsys/tj/"
+#define ESPSYS_FS SD
+#define PATH_ESPSYS "/espsys/"
+#define PATH_TJ "/espsys/tj/"
 
 #define MAX_BELL 30
 #define MAX_TEMPLATE_JADWAL 10
@@ -33,7 +34,6 @@
 #define I2C_SDA GPIO_NUM_26
 #define I2C_SCL GPIO_NUM_25
 #define I2C_FREQ 100000U
-#define ESPSYS_FS SPIFFS
 
 #define SD_DI GPIO_NUM_33
 #define SD_DO GPIO_NUM_35
