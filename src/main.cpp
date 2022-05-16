@@ -4,15 +4,27 @@
 #include <map>
 #include <string.h>
 #include <SPI.h>
+#include "AudioFileSourceSD.h"
+#include "AudioGeneratorMP3.h"
+#include "AudioOutputI2S.h"
+#include <pcf8574.h>
 
 RTC_DS3231 rtc;
 SPIClass SDSPI;
+AudioGeneratorMP3 mp3PCM;
+AudioFileSourceSD mp3Source;
+AudioOutputI2S i2sOut;
+pcf8574 ioExpander;
 
+void audioTask_cb(void* pvParameters);
+TaskHandle_t audioTask;
 DateTime now;
+
 void setup(void) {
-  // jw_used = new JadwalHari();
-  // jw_temp = new JadwalHari();
-  // tj_lists = (TemplateJadwal*)malloc(sizeof(TemplateJadwal) * TJ_MAX_LEN);
+  btStop();
+  jw_used = new JadwalHari();
+  jw_temp = new JadwalHari();
+  tj_lists = (TemplateJadwal*)malloc(sizeof(TemplateJadwal) * TJ_MAX_LEN);
   Serial.begin(115200);
   Serial.printf("SDK %s\n", ESP.getSdkVersion());
   Serial.printf("CPU Freq : %luMHz\n", ESP.getCpuFreqMHz());
@@ -49,16 +61,32 @@ void setup(void) {
   belManual_load(belManual, belManual_len);
   templateJadwal_activeName_load();
   templateJadwal_list_load();
-  jadwalHari_load(&tj_used, &jw_used, tj_used.tipeJadwal == TJ_MINGGUAN ? now.dayOfTheWeek() : 0);
+  jadwalHari_load(&tj_used, jw_used, tj_used.tipeJadwal == TJ_MINGGUAN ? now.dayOfTheWeek() : 0);
+
+  i2sOut.SetPinout(I2S_BCK, I2S_WS, I2S_DO);
+  i2sOut.SetGain(0.016);
+  ioExpander.init(IOEXPAND_I2C_ADDRESS);
+  ioExpander.writeByte(0x00);
+  ioExpander.write(1, HIGH);
 
   initStyles();
   loadMainScreen();
+
+  xTaskCreatePinnedToCore(
+    audioTask_cb,   /* Task function. */
+    "audioTask",     /* name of task. */
+    10000,       /* Stack size of task */
+    NULL,        /* parameter of the task */
+    1,           /* priority of the task */
+    &audioTask,      /* Task handle to keep track of created task */
+    0);          /* pin task to core 0 */
 }
 
 unsigned long lastRTCMillis;
 uint8_t lastSecond, lastDay;
 void loop() {
   if (millis() - lastRTCMillis >= 1000) {
+    lastRTCMillis = millis();
     now = rtc.now();
   }
   if (lastSecond != now.second()) {
@@ -67,17 +95,17 @@ void loop() {
       lv_label_set_text_fmt(mainScreen_date, "%s, %d %s %d", dowToStr(now.dayOfTheWeek()), now.day(), monthToStr(now.month()), now.year());
     }
     uint16_t tbel = (now.hour() * 100) + now.minute();
-    for (int i = 0; i < jw_used.jumlahBel;i++) { // Check bel index every second
-      if (tbel < jw_used.jadwalBel[i]) {
+    for (int i = 0; i < jw_used->jumlahBel;i++) { // Check bel index every second
+      if (tbel < jw_used->jadwalBel[i]) {
         nextBelIndex = i;
         break;
       }
-      if (i == jw_used.jumlahBel - 1 && tbel >= jw_used.jadwalBel[i]) {
+      if (i == jw_used->jumlahBel - 1 && tbel >= jw_used->jadwalBel[i]) {
         nextBelIndex = 255;
         break;
       }
     }
-    if (jw_used.jumlahBel == 0)
+    if (jw_used->jumlahBel == 0)
       nextBelIndex = 255;
     if (nextBelIndex != lastNextBelIndex) { // Bel event
       if (lv_scr_act() == mainScreen) {
@@ -87,22 +115,42 @@ void loop() {
           lv_label_set_text(mainScreen_nextBellAudioFile, "");
         }
         else {
-          lv_label_set_text_fmt(mainScreen_nextBellClock, "%02d:%02d", jw_used.jadwalBel[nextBelIndex] / 100, jw_used.jadwalBel[nextBelIndex] % 100);
-          lv_label_set_text_fmt(mainScreen_nextBellName, "%s", jw_used.namaBel[nextBelIndex]);
-          lv_label_set_text_fmt(mainScreen_nextBellAudioFile, LV_SYMBOL_AUDIO " %s", jw_used.belAudioFile[nextBelIndex]);
+          lv_label_set_text_fmt(mainScreen_nextBellClock, "%02d:%02d", jw_used->jadwalBel[nextBelIndex] / 100, jw_used->jadwalBel[nextBelIndex] % 100);
+          lv_label_set_text_fmt(mainScreen_nextBellName, "%s", jw_used->namaBel[nextBelIndex]);
+          lv_label_set_text_fmt(mainScreen_nextBellAudioFile, LV_SYMBOL_AUDIO " %s", jw_used->belAudioFile[nextBelIndex]);
         }
       }
       lastNextBelIndex = nextBelIndex;
     }
     if (lastDay != now.day()) {
-      jadwalHari_load(&tj_used, &jw_used, tj_used.tipeJadwal == TJ_MINGGUAN ? now.dayOfTheWeek() : 0);
+      jadwalHari_load(&tj_used, jw_used, tj_used.tipeJadwal == TJ_MINGGUAN ? now.dayOfTheWeek() : 0);
       lastDay = now.day();
     }
   }
   lv_task_handler();
   lastSecond = now.second();
+
   lv_timer_handler(); /* let the GUI do its work */
-  delay(5);
+  delay(1);
+}
+
+void audioTask_cb(void* pvParameters) {
+  Serial.print("audioTask running on core ");
+  Serial.println(xPortGetCoreID());
+  mp3Source.open("/Earthea.mp3");
+  mp3PCM.begin(&mp3Source, &i2sOut);
+
+  for (;;) {
+    if (mp3PCM.isRunning())
+    {
+      if (!mp3PCM.loop())
+      {
+        mp3PCM.stop();
+        mp3Source.close();
+      }
+    }
+    vTaskDelay(5);
+  }
 }
 
 void loadMainScreen() {
@@ -158,20 +206,20 @@ void loadMainScreen() {
   lvc_label_init(mainScreen_nextBellAudioFile, &lv_font_montserrat_12, LV_ALIGN_CENTER, 0, 102, bs_white, LV_TEXT_ALIGN_CENTER, LV_LABEL_LONG_SCROLL_CIRCULAR, 150);
 
   uint16_t tbel = (now.hour() * 100) + now.minute();
-  for (int i = 0; i < jw_used.jumlahBel;i++) {
-    log_d("i %d tbel %d jadwalBel[%d] %d\n", i, tbel, i, jw_used.jadwalBel[i]);
-    if (tbel < jw_used.jadwalBel[i]) {
+  for (int i = 0; i < jw_used->jumlahBel;i++) {
+    log_d("i %d tbel %d jadwalBel[%d] %d\n", i, tbel, i, jw_used->jadwalBel[i]);
+    if (tbel < jw_used->jadwalBel[i]) {
       nextBelIndex = i;
       log_d("nextBelIndex reg %d\n", nextBelIndex);
       break;
     }
-    if (i == jw_used.jumlahBel - 1 && tbel >= jw_used.jadwalBel[i]) {
+    if (i == jw_used->jumlahBel - 1 && tbel >= jw_used->jadwalBel[i]) {
       nextBelIndex = 255;
       log_d("nextBelIndex max %d\n", nextBelIndex);
       break;
     }
   }
-  if (jw_used.jumlahBel == 0)
+  if (jw_used->jumlahBel == 0)
     nextBelIndex = 255;
   log_d("nextBelIndex %d\n", nextBelIndex);
 
@@ -181,9 +229,9 @@ void loadMainScreen() {
     lv_label_set_text(mainScreen_nextBellAudioFile, "");
   }
   else {
-    lv_label_set_text_fmt(mainScreen_nextBellClock, "%02d:%02d", jw_used.jadwalBel[nextBelIndex] / 100, jw_used.jadwalBel[nextBelIndex] % 100);
-    lv_label_set_text_fmt(mainScreen_nextBellName, "%s", jw_used.namaBel[nextBelIndex]);
-    lv_label_set_text_fmt(mainScreen_nextBellAudioFile, LV_SYMBOL_AUDIO " %s", jw_used.belAudioFile[nextBelIndex]);
+    lv_label_set_text_fmt(mainScreen_nextBellClock, "%02d:%02d", jw_used->jadwalBel[nextBelIndex] / 100, jw_used->jadwalBel[nextBelIndex] % 100);
+    lv_label_set_text_fmt(mainScreen_nextBellName, "%s", jw_used->namaBel[nextBelIndex]);
+    lv_label_set_text_fmt(mainScreen_nextBellAudioFile, LV_SYMBOL_AUDIO " %s", jw_used->belAudioFile[nextBelIndex]);
   }
 
   // Swipe ke atas label
@@ -201,8 +249,8 @@ void loadMainMenu() {
 
   // Create 4 tab for the tabview
   tab1 = lv_tabview_add_tab(tabv, "Utama");
-  tab2 = lv_tabview_add_tab(tabv, "Buat\nJadwal");
-  tab3 = lv_tabview_add_tab(tabv, "Pengaturan\nTambahan");
+  tab2 = lv_tabview_add_tab(tabv, "Template\nJadwal");
+  tab3 = lv_tabview_add_tab(tabv, "Tambahan");
 
   lv_obj_t* tab_btns = lv_tabview_get_tab_btns(tabv);
   // Set styles of tab_btns, chosen the most fit
@@ -279,7 +327,7 @@ void tabOne() {
     lv_obj_set_height(lv_obj_get_child(button, 0), lv_pct(100));
     lv_obj_add_event_cb(button, [](lv_event_t* e) {
       static WidgetParameterData belManual_wpd;
-      static char belManual_message[90] = {0};
+      static char belManual_message[90] = { 0 };
       lv_obj_t* btn = lv_event_get_target(e);
       lv_obj_t* btnLabel = lv_obj_get_child(btn, 0);
       sprintf(belManual_message, "Apakah anda yakin ingin mengaktifkan bel manual %s?", lv_label_get_text(btnLabel));
@@ -480,7 +528,7 @@ void tabThree() {
 }
 
 void tabelJadwalHariIni() {
-  jadwalHari_load(&tj_used, &jw_used, tj_used.tipeJadwal == TJ_MINGGUAN ? now.dayOfTheWeek() : 0);
+  jadwalHari_load(&tj_used, jw_used, tj_used.tipeJadwal == TJ_MINGGUAN ? now.dayOfTheWeek() : 0);
 
   static const char* jw_table_header[4] = { "#","Nama","Jam\nBel","File Audio" };
   lv_coord_t col_dsc[] = { 46, 160, 76, 132, LV_GRID_TEMPLATE_LAST };
@@ -498,19 +546,19 @@ void tabelJadwalHariIni() {
   lv_obj_set_height(jw_lv_list_table, LV_SIZE_CONTENT);
 
   lv_table_set_col_cnt(jw_lv_list_table, 4);
-  lv_table_set_row_cnt(jw_lv_list_table, jw_used.jumlahBel + 1);
+  lv_table_set_row_cnt(jw_lv_list_table, jw_used->jumlahBel + 1);
 
   for (int i = 0;i < 4;i++) {
     lv_table_set_cell_value(jw_lv_list_table, 0, i, jw_table_header[i]);
     lv_table_set_col_width(jw_lv_list_table, i, col_dsc[i]);
   }
-  for (int i = 0; i < jw_used.jumlahBel;i++) {
+  for (int i = 0; i < jw_used->jumlahBel;i++) {
     lv_table_set_cell_value_fmt(jw_lv_list_table, i + 1, 0, "%d", i + 1);
-    lv_table_set_cell_value_fmt(jw_lv_list_table, i + 1, 1, jw_used.namaBel[i]);
-    lv_table_set_cell_value_fmt(jw_lv_list_table, i + 1, 2, "%02d:%02d", jw_used.jadwalBel[i] / 100, jw_used.jadwalBel[i] % 100);
-    lv_table_set_cell_value_fmt(jw_lv_list_table, i + 1, 3, jw_used.belAudioFile[i]);
+    lv_table_set_cell_value_fmt(jw_lv_list_table, i + 1, 1, jw_used->namaBel[i]);
+    lv_table_set_cell_value_fmt(jw_lv_list_table, i + 1, 2, "%02d:%02d", jw_used->jadwalBel[i] / 100, jw_used->jadwalBel[i] % 100);
+    lv_table_set_cell_value_fmt(jw_lv_list_table, i + 1, 3, jw_used->belAudioFile[i]);
   }
-  if (jw_used.jumlahBel == 0) {
+  if (jw_used->jumlahBel == 0) {
     lv_table_set_cell_value(jw_lv_list_table, 1, 0, "Tidak ada bel untuk hari ini");
     lv_table_add_cell_ctrl(jw_lv_list_table, 1, 0, LV_TABLE_CELL_CTRL_MERGE_RIGHT);
     lv_table_add_cell_ctrl(jw_lv_list_table, 1, 1, LV_TABLE_CELL_CTRL_MERGE_RIGHT);
@@ -1169,7 +1217,6 @@ void Traverser::createTraverser(lv_obj_t* issuer, const char* dir, bool build) {
     lv_obj_set_size(modal, lv_pct(100), lv_pct(100)); // Most fit number
     lv_obj_align(modal, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_pad_all(modal, 0, 0);
-    lv_obj_clear_flag(modal, LV_OBJ_FLAG_SCROLL_MOMENTUM);
     modalTitle = lv_label_create(modal);
     lvc_label_init(modalTitle, &lv_font_montserrat_20, LV_ALIGN_TOP_LEFT, 13, 13);
     lv_label_set_text_static(modalTitle, "Pilih File");
@@ -1390,7 +1437,6 @@ void TemplateJadwalBuilder::create(int row) {
   btj_modal = lv_obj_create(btj_overlay);
   lv_obj_set_size(btj_modal, lv_pct(100), lv_pct(100));
   lv_obj_set_style_pad_all(btj_modal, 0, 0);
-  lv_obj_clear_flag(btj_modal, LV_OBJ_FLAG_SCROLL_MOMENTUM);
 
   btj_modal_header = lv_label_create(btj_modal);
   lvc_label_init(btj_modal_header, &lv_font_montserrat_20, LV_ALIGN_TOP_LEFT, 15, 15);
@@ -1585,7 +1631,7 @@ void TemplateJadwalBuilder::create(int row) {
 
     lv_label_set_text(btnLabel, dowToStr(selectedIdx));
 
-    jadwalHari_load(tj_target, &jw_temp, selectedIdx <= 6 ? selectedIdx : 0);
+    jadwalHari_load(tj_target, jw_temp, selectedIdx <= 6 ? selectedIdx : 0);
 
     btj_tj_build();
     }, LV_EVENT_REFRESH, btnLabel);
@@ -1600,7 +1646,7 @@ void TemplateJadwalBuilder::create(int row) {
       return;
     }
     lv_obj_t* btnLabel = (lv_obj_t*)lv_event_get_user_data(e);
-    belChanged = !jadwalHari_store(tj_target, &jw_temp, tj_target->tipeJadwal == TJ_HARIAN ? 0 : strToDow(lv_label_get_text(btnLabel)));
+    belChanged = !jadwalHari_store(tj_target, jw_temp, tj_target->tipeJadwal == TJ_HARIAN ? 0 : strToDow(lv_label_get_text(btnLabel)));
     if (belChanged)
       modal_create_alert("Gagal menyimpan tabel bel!", "Gagal!", &lv_font_montserrat_20, &lv_font_montserrat_14, bs_white, bs_dark, bs_danger);
     else
@@ -1609,7 +1655,7 @@ void TemplateJadwalBuilder::create(int row) {
     tabelJadwalHariIni(); // Update tabelJadwalHariIni just in case the changed tabel bel is used for tabelJadwalHariIni
     }, LV_EVENT_CLICKED, btnLabel);
 
-  jadwalHari_load(tj_target, &jw_temp, 0);
+  jadwalHari_load(tj_target, jw_temp, 0);
 
   btj_tj_build(false);
 }
@@ -1628,7 +1674,7 @@ void TemplateJadwalBuilder::btj_tj_build(bool refresh) {
   lv_obj_set_style_translate_y(btj_modal_bellList, 250, 0);
 
   lv_table_set_col_cnt(btj_modal_bellList, 5);
-  lv_table_set_row_cnt(btj_modal_bellList, jw_temp.jumlahBel + 1);
+  lv_table_set_row_cnt(btj_modal_bellList, jw_temp->jumlahBel + 1);
 
   lv_obj_set_style_pad_top(btj_modal_bellList, 8, LV_PART_ITEMS);
   lv_obj_set_style_pad_bottom(btj_modal_bellList, 8, LV_PART_ITEMS);
@@ -1643,20 +1689,20 @@ void TemplateJadwalBuilder::btj_tj_build(bool refresh) {
   lv_obj_set_style_radius(btj_modal_addBellBtn, lv_pct(100), 0);
   lv_obj_set_style_text_font(label, &lv_font_montserrat_20, 0);
   lv_obj_add_event_cb(btj_modal_addBellBtn, [](lv_event_t* e) {
-    if (jw_temp.jumlahBel == 30) {
+    if (jw_temp->jumlahBel == 30) {
       modal_create_alert("Tidak dapat menambah bel lagi!", "Peringatan!", &lv_font_montserrat_20, &lv_font_montserrat_14, bs_white, bs_dark, bs_danger);
       return;
     }
     belChanged = true;
-    strcpy(jw_temp.namaBel[jw_temp.jumlahBel], "");
-    strcpy(jw_temp.belAudioFile[jw_temp.jumlahBel], "");
-    jw_temp.jadwalBel[jw_temp.jumlahBel] = 0;
-    jw_temp.jumlahBel++;
-    lv_table_set_row_cnt(btj_modal_bellList, jw_temp.jumlahBel + 1);
-    lv_table_set_cell_value_fmt(btj_modal_bellList, jw_temp.jumlahBel, 0, "%d", jw_temp.jumlahBel);
-    lv_table_set_cell_value_fmt(btj_modal_bellList, jw_temp.jumlahBel, 1, jw_temp.namaBel[jw_temp.jumlahBel - 1]);
-    lv_table_set_cell_value_fmt(btj_modal_bellList, jw_temp.jumlahBel, 2, "%02d:%02d", jw_temp.jadwalBel[jw_temp.jumlahBel - 1] / 100, jw_temp.jadwalBel[jw_temp.jumlahBel - 1] % 100);
-    lv_table_set_cell_value_fmt(btj_modal_bellList, jw_temp.jumlahBel, 3, jw_temp.belAudioFile[jw_temp.jumlahBel - 1]);
+    strcpy(jw_temp->namaBel[jw_temp->jumlahBel], "");
+    strcpy(jw_temp->belAudioFile[jw_temp->jumlahBel], "");
+    jw_temp->jadwalBel[jw_temp->jumlahBel] = 0;
+    jw_temp->jumlahBel++;
+    lv_table_set_row_cnt(btj_modal_bellList, jw_temp->jumlahBel + 1);
+    lv_table_set_cell_value_fmt(btj_modal_bellList, jw_temp->jumlahBel, 0, "%d", jw_temp->jumlahBel);
+    lv_table_set_cell_value_fmt(btj_modal_bellList, jw_temp->jumlahBel, 1, jw_temp->namaBel[jw_temp->jumlahBel - 1]);
+    lv_table_set_cell_value_fmt(btj_modal_bellList, jw_temp->jumlahBel, 2, "%02d:%02d", jw_temp->jadwalBel[jw_temp->jumlahBel - 1] / 100, jw_temp->jadwalBel[jw_temp->jumlahBel - 1] % 100);
+    lv_table_set_cell_value_fmt(btj_modal_bellList, jw_temp->jumlahBel, 3, jw_temp->belAudioFile[jw_temp->jumlahBel - 1]);
     lv_obj_set_size(btj_modal_bellList, lv_pct(100), LV_SIZE_CONTENT);
     lv_obj_align_to(btj_modal_addBellBtn, btj_modal_bellList, LV_ALIGN_OUT_BOTTOM_MID, 0, 30);
     lv_obj_align_to(btj_dummyHeight, btj_modal_addBellBtn, LV_ALIGN_OUT_BOTTOM_MID, 0, 0);
@@ -1677,11 +1723,11 @@ void TemplateJadwalBuilder::btj_tj_build(bool refresh) {
     lv_table_set_col_width(btj_modal_bellList, i, btjListWidthDescriptor[i]);
   }
 
-  for (int i = 0; i < jw_temp.jumlahBel;i++) {
+  for (int i = 0; i < jw_temp->jumlahBel;i++) {
     lv_table_set_cell_value_fmt(btj_modal_bellList, i + 1, 0, "%d", i + 1);
-    lv_table_set_cell_value_fmt(btj_modal_bellList, i + 1, 1, jw_temp.namaBel[i]);
-    lv_table_set_cell_value_fmt(btj_modal_bellList, i + 1, 2, "%02d:%02d", jw_temp.jadwalBel[i] / 100, jw_temp.jadwalBel[i] % 100);
-    lv_table_set_cell_value_fmt(btj_modal_bellList, i + 1, 3, jw_temp.belAudioFile[i]);
+    lv_table_set_cell_value_fmt(btj_modal_bellList, i + 1, 1, jw_temp->namaBel[i]);
+    lv_table_set_cell_value_fmt(btj_modal_bellList, i + 1, 2, "%02d:%02d", jw_temp->jadwalBel[i] / 100, jw_temp->jadwalBel[i] % 100);
+    lv_table_set_cell_value_fmt(btj_modal_bellList, i + 1, 3, jw_temp->belAudioFile[i]);
   }
   lv_obj_align_to(btj_modal_addBellBtn, btj_modal_bellList, LV_ALIGN_OUT_BOTTOM_MID, 0, 30);
   lv_obj_align_to(btj_dummyHeight, btj_modal_addBellBtn, LV_ALIGN_OUT_BOTTOM_MID, 0, 0);
@@ -1693,7 +1739,7 @@ void TemplateJadwalBuilder::btj_tj_build(bool refresh) {
   lv_obj_add_event_cb(btj_modal_bellList, [](lv_event_t* e) {
     const char* traverserParam = (const char*)lv_event_get_param(e);
     lv_table_set_cell_value_fmt(btj_modal_bellList, ta_row, ta_col, traverserParam);
-    strcpy(jw_temp.belAudioFile[ta_row - 1], traverserParam);
+    strcpy(jw_temp->belAudioFile[ta_row - 1], traverserParam);
     belChanged = true;
     lv_obj_set_size(btj_modal_bellList, lv_pct(100), LV_SIZE_CONTENT);
     lv_obj_align_to(btj_modal_addBellBtn, btj_modal_bellList, LV_ALIGN_OUT_BOTTOM_MID, 0, 30);
@@ -1767,12 +1813,12 @@ void TemplateJadwalBuilder::create_textarea_prompt(const char* placeholder) {
     lv_obj_t* ta = (lv_obj_t*)lv_event_get_user_data(e);
     if (ta_col == 1) {
       lv_table_set_cell_value(btj_modal_bellList, ta_row, ta_col, lv_textarea_get_text(ta));
-      strcpy(jw_temp.namaBel[ta_row - 1], lv_textarea_get_text(ta));
+      strcpy(jw_temp->namaBel[ta_row - 1], lv_textarea_get_text(ta));
     }
     else {
       int numval = atoi(lv_textarea_get_text(ta));
       lv_table_set_cell_value_fmt(btj_modal_bellList, ta_row, ta_col, "%02d:%02d", numval / 100, numval % 100);
-      jw_temp.jadwalBel[ta_row - 1] = numval;
+      jw_temp->jadwalBel[ta_row - 1] = numval;
     }
     lv_event_send(ta, LV_EVENT_DEFOCUSED, ta_col == 2 ? numericKeyboard : regularKeyboard);
     belChanged = true;
@@ -1791,10 +1837,10 @@ void TemplateJadwalBuilder::btj_table_actionBtn_cb(lv_event_t* e) {
   ta_col = col;
   if (col == 4) { // Delete button
     row--;
-    memmove(jw_temp.belAudioFile + row, jw_temp.belAudioFile + row + 1, (jw_temp.jumlahBel - row - 1) * sizeof(*jw_temp.belAudioFile));
-    memmove(jw_temp.namaBel + row, jw_temp.namaBel + row + 1, (jw_temp.jumlahBel - row - 1) * sizeof(*jw_temp.namaBel));
-    memmove(jw_temp.jadwalBel + row, jw_temp.jadwalBel + row + 1, (jw_temp.jumlahBel - row - 1) * sizeof(*jw_temp.jadwalBel));
-    jw_temp.jumlahBel--;
+    memmove(jw_temp->belAudioFile + row, jw_temp->belAudioFile + row + 1, (jw_temp->jumlahBel - row - 1) * sizeof(*jw_temp->belAudioFile));
+    memmove(jw_temp->namaBel + row, jw_temp->namaBel + row + 1, (jw_temp->jumlahBel - row - 1) * sizeof(*jw_temp->namaBel));
+    memmove(jw_temp->jadwalBel + row, jw_temp->jadwalBel + row + 1, (jw_temp->jumlahBel - row - 1) * sizeof(*jw_temp->jadwalBel));
+    jw_temp->jumlahBel--;
     belChanged = true;
     lv_obj_update_layout(btj_modal_bellList);
     lv_coord_t tempScroll = lv_obj_get_scroll_y(btj_modal); // Save the scroll

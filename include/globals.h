@@ -31,6 +31,15 @@
 #define TJ_MINGGUAN 1
 #define FS_MAX_NAME_LEN 32
 #define TJ_MAX_LEN 10
+
+#define I2S_MAX_GAIN 0.07
+#define I2S_MIN_GAIN 0.016
+#define I2S_VOLUME_STEP 10.
+#define I2S_DO GPIO_NUM_13
+#define I2S_BCK GPIO_NUM_17
+#define I2S_WS GPIO_NUM_0
+
+#define IOEXPAND_I2C_ADDRESS 0x20
 #define I2C_SDA GPIO_NUM_26
 #define I2C_SCL GPIO_NUM_25
 #define I2C_FREQ 100000U
@@ -104,9 +113,9 @@ struct TemplateJadwal {
 
 const JadwalHari jw_empty({});
 const TemplateJadwal tj_empty("new", 0);
-JadwalHari jw_used; // Current used jadwal harian
-JadwalHari jw_temp; // Used for storing temporary data while editing jadwal harian at menu
-TemplateJadwal tj_lists[TJ_MAX_LEN];
+JadwalHari *jw_used; // Current used jadwal harian
+JadwalHari *jw_temp; // Used for storing temporary data while editing jadwal harian at menu
+TemplateJadwal *tj_lists;
 TemplateJadwal tj_used; // Currently used template jadwal
 TemplateJadwal tj_temp;
 static constexpr size_t belManual_len = 4;
