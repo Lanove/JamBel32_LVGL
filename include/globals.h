@@ -102,8 +102,8 @@ struct BelManual {
     bool enabled = false;
     char name[32] = "Kosong";
     char audioFile[128] = "Pilih File Audio";
-    lv_obj_t* buttonPointer;
 };
+lv_obj_t* belManual_btn_pointer[4];
 
 struct JadwalHari {
     char namaBel[MAX_BELL][FS_MAX_NAME_LEN];

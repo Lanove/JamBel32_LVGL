@@ -494,7 +494,7 @@ void tabOne() {
       }, LV_EVENT_REFRESH, NULL);
     if (!belManual[i].enabled)
       lv_obj_add_state(button, LV_STATE_DISABLED);
-    belManual[i].buttonPointer = button;
+    belManual_btn_pointer[i] = button;
   }
 
   // End of create tombol manual box
@@ -981,9 +981,9 @@ void belManual_btn_cb(lv_event_t* e) {
       // No need to set the button text, because it's already pointing to belName[].name char pointer
       // But need to enable/disable button according to checkbox value
       if (!belManual[i - 3].enabled)
-        lv_obj_add_state(belManual[i - 3].buttonPointer, LV_STATE_DISABLED);
+        lv_obj_add_state(belManual_btn_pointer[i-3], LV_STATE_DISABLED);
       else
-        lv_obj_clear_state(belManual[i - 3].buttonPointer, LV_STATE_DISABLED);
+        lv_obj_clear_state(belManual_btn_pointer[i-3], LV_STATE_DISABLED);
     }
     lv_obj_del(lv_obj_get_parent(modal));
     belManual_store(belManual, belManual_len);
