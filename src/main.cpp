@@ -19,6 +19,7 @@ AudioOutputI2S* i2sOut;
 pcf8574* ioExpander;
 
 void audioTask_cb(void* pvParameters);
+bool is_filename_mp3(const char* filename);
 TaskHandle_t audioTask;
 DateTime now;
 
@@ -224,14 +225,6 @@ void loop() {
 }
 
 void audioTask_cb(void* pvParameters) {
-  auto is_filename_mp3 = [](const char* filename) -> bool {
-    char buffer[256];
-    strcpy(buffer, filename);
-    for (char* p = buffer; *p; p++) *p = tolower(*p);
-    const char* dot = strrchr(buffer, '.');
-    if (!dot || dot == buffer) return false;
-    return (strcmp(dot + 1, "mp3") == 0);
-  };
   log_i("audioTask running on core %d", xPortGetCoreID());
 
   unsigned long audioCheckMillis = 0;
@@ -273,6 +266,15 @@ void audioTask_cb(void* pvParameters) {
     }
     vTaskDelay(5);
   }
+}
+
+bool is_filename_mp3(const char* filename) {
+  char buffer[256];
+  strcpy(buffer, filename);
+  for (char* p = buffer; *p; p++) *p = tolower(*p);
+  const char* dot = strrchr(buffer, '.');
+  if (!dot || dot == buffer) return false;
+  return (strcmp(dot + 1, "mp3") == 0);
 }
 
 void loadMainScreen() {
@@ -981,9 +983,9 @@ void belManual_btn_cb(lv_event_t* e) {
       // No need to set the button text, because it's already pointing to belName[].name char pointer
       // But need to enable/disable button according to checkbox value
       if (!belManual[i - 3].enabled)
-        lv_obj_add_state(belManual_btn_pointer[i-3], LV_STATE_DISABLED);
+        lv_obj_add_state(belManual_btn_pointer[i - 3], LV_STATE_DISABLED);
       else
-        lv_obj_clear_state(belManual_btn_pointer[i-3], LV_STATE_DISABLED);
+        lv_obj_clear_state(belManual_btn_pointer[i - 3], LV_STATE_DISABLED);
     }
     lv_obj_del(lv_obj_get_parent(modal));
     belManual_store(belManual, belManual_len);
@@ -1516,8 +1518,13 @@ void Traverser::createTraverser(lv_obj_t* issuer, const char* dir, bool build) {
   File file = root.openNextFile();
   while (file)
   {
-    if (strcmp(file.name(), "System Volume Information") != 0 && strcmp(file.name(), "espsys") != 0)
+    if (strcmp(file.name(), "System Volume Information") != 0 && strcmp(file.name(), "espsys") != 0) {
+      if (!file.isDirectory() && !is_filename_mp3(file.name())) {
+        file = root.openNextFile();
+        continue;
+      }
       rowLen++;
+    }
     file = root.openNextFile();
   }
   root.close();
@@ -1556,6 +1563,10 @@ void Traverser::createTraverser(lv_obj_t* issuer, const char* dir, bool build) {
   while (file)
   {
     if (strcmp(file.name(), "System Volume Information") != 0 && strcmp(file.name(), "espsys") != 0) {
+      if (!file.isDirectory() && !is_filename_mp3(file.name())) {
+        file = root.openNextFile();
+        continue;
+      }
       rowLen++;
       bool isDir = file.isDirectory();
       unsigned long size = (unsigned long)file.size();
