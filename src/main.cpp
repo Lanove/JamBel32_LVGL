@@ -9,7 +9,7 @@
 #include "AudioOutputI2S.h"
 #include <pcf8574.h>
 #include <plc_timer.h>
-
+#include <Update.h>
 
 RTC_DS3231* rtc;
 SPIClass SDSPI;
@@ -20,6 +20,10 @@ pcf8574* ioExpander;
 
 void audioTask_cb(void* pvParameters);
 bool is_filename_mp3(const char* filename);
+void checkFirmwareBinary();
+void performFirmwareUpdate(Stream& updateSource, size_t updateSize);
+void macCheck();
+void update_onProgress_callback(size_t s, size_t s2);
 TaskHandle_t audioTask;
 DateTime now;
 
@@ -115,6 +119,9 @@ void setup(void) {
   log_i("Heap Size : %luKB\nFree Heap : %luKB", ESP.getHeapSize() / 1024, ESP.getFreeHeap() / 1024);
 
   loadMainScreen();
+
+  macCheck();
+  checkFirmwareBinary();
 }
 
 unsigned long lastRTCMillis;
@@ -124,7 +131,37 @@ TON timerDelayStart(2000);
 TON timerDelayStop(2000);
 
 void loop() {
+  //Check to see if anything is available in the serial receive buffer
+  while (Serial.available() > 0)
+  {
+    static constexpr int maxMessageLength = 10;
+    //Create a place to hold the incoming message
+    static char message[maxMessageLength];
+    static unsigned int message_pos = 0;
 
+    //Read the next available byte in the serial receive buffer
+    char inByte = Serial.read();
+
+    //Message coming in (check not terminating character) and guard for over message size
+    if (inByte != '\n' && (message_pos < maxMessageLength - 1))
+    {
+      //Add the incoming byte to our message
+      message[message_pos] = inByte;
+      message_pos++;
+    }
+    //Full message received...
+    else
+    {
+      //Add null character to string
+      message[message_pos] = '\0';
+      // Sending "gmac" to ESP32 will print eFuse MAC to serial
+      if (strcmp(message, "gmac\r") == 0)
+        Serial.printf("eFuse MAC : %llX\n", ESP.getEfuseMac());
+
+      //Reset for the next message
+      message_pos = 0;
+    }
+  }
   if (millis() - lastRTCMillis >= 1000) {
     lastRTCMillis = millis();
     now = rtc->now();
@@ -727,6 +764,16 @@ void tabThree() {
   lvc_label_init(componentLabel);
   lv_obj_align_to(componentLabel, adjustVolumeBtn, LV_ALIGN_OUT_TOP_LEFT, 0, -5);
   lv_label_set_text_static(componentLabel, "Atur Volume");
+
+  lv_obj_t* releaseVer = lv_label_create(box);
+  lvc_label_init(releaseVer);
+  lv_obj_align_to(releaseVer, adjustVolumeBtn, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 20);
+  lv_label_set_text_static(releaseVer, "Release Ver : "RELEASE_VER);
+
+  lv_obj_t* md5 = lv_label_create(box);
+  lvc_label_init(md5);
+  lv_obj_align_to(md5, releaseVer, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 10);
+  lv_label_set_text_fmt(md5, "MD5 : %s", ESP.getSketchMD5().c_str());
 }
 
 void tabelJadwalHariIni() {
@@ -1461,6 +1508,92 @@ bool volume_load() {
   log_d("volume.bin loaded : %d", audioVolume);
   return true;
 }
+void macCheck() {
+  if (!sdBeginFlag)
+    return;
+  if (!ESPSYS_FS.exists(PATH_ESPSYS"mac.txt"))
+    return;
+  File file = ESPSYS_FS.open(PATH_ESPSYS"mac.txt", "w");
+  if (!file)
+    return;
+  uint64_t mac = ESP.getEfuseMac();
+  char macBuffer[16];
+  sprintf(macBuffer, "%llX", mac);
+  file.write((uint8_t*)macBuffer, sizeof(macBuffer));
+  file.close();
+}
+void checkFirmwareBinary() {
+  if (!sdBeginFlag)
+    return;
+  File updateBin = ESPSYS_FS.open("/firmware.bin");
+  if (updateBin) {
+    if (updateBin.isDirectory()) {
+      log_e("Error, firmware.bin is not a file");
+      updateBin.close();
+      return;
+    }
+
+    size_t updateSize = updateBin.size();
+
+    if (updateSize > 0) {
+      Serial.println("Try to start update");
+      performFirmwareUpdate(updateBin, updateSize);
+    }
+    else
+      log_e("Error, file is empty");
+
+    updateBin.close();
+  }
+  else
+    log_e("Could not load firmware.bin from sd root");
+}
+void performFirmwareUpdate(Stream& updateSource, size_t updateSize) {
+  if (Update.begin(updateSize)) {
+    tft.fillScreen(TFT_BLACK);
+    tft.setTextSize(2);
+    tft.setTextColor(TFT_GREEN,TFT_BLACK);
+    tft.setCursor(0, 0);
+    tft.print("Updating Firmware...");
+    Update.onProgress(update_onProgress_callback);
+    size_t written = Update.writeStream(updateSource);
+    if (Update.end()) {
+      log_i("OTA done!");
+      if (Update.isFinished()) {
+        delay(1000);
+        log_i("Update successfully completed. Rebooting.");
+        tft.setCursor(0, 50);
+        tft.printf("Update successfully completed. Rebooting in 3s");
+        // we finished remove the binary from sd card to indicate end of the process
+        ESPSYS_FS.remove("/firmware.bin");
+        delay(3000);
+        ESP.restart();
+      }
+      else {
+        log_e("Update not finished? Something went wrong!");
+        tft.setCursor(0, 50);
+        tft.printf("Update not finished? Something went wrong!");
+      }
+    }
+    else {
+      log_e("Error Occurred. Error #: %s", Update.errorString());
+      tft.setCursor(0, 50);
+      tft.printf("Error Occurred. Error #: %s", Update.errorString());
+    }
+
+  }
+  else
+  {
+    log_i("Not enough space to begin firmware update");
+    tft.setCursor(0, 50);
+    tft.printf("Not enough space to begin firmware update");
+  }
+}
+
+void update_onProgress_callback(size_t s, size_t s2) {
+  tft.setCursor(0, 50);
+  tft.printf("%lu/%lu", Update.progress(), Update.size());
+}
+
 // Traverser functions declaration
 void Traverser::createTraverser(lv_obj_t* issuer, const char* dir, bool build) {
   strcpy(traverseDirBuffer, dir); // Store target traverse directory to buffer
@@ -2164,7 +2297,6 @@ void TemplateJadwalBuilder::initComponentLabel(lv_obj_t* label, lv_obj_t* alignT
   lv_obj_set_style_text_font(label, &lv_font_montserrat_12, 0);
   lv_label_set_text_static(label, labelMessage);
 }
-
 
 lv_obj_t* lvc_create_overlay() {
   lv_obj_t* overlay = lv_obj_create(lv_scr_act());
