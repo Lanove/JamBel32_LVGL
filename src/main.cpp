@@ -104,6 +104,7 @@ void setup(void) {
 
   i2sOut->SetPinout(I2S_BCK, I2S_WS, I2S_DO);
   i2sOut->SetGain(volumeToGain(audioVolume));
+  i2sOut->begin();
 
   ioExpander->init(IOEXPAND_I2C_ADDRESS);
   ioExpander->writeByte(0x00);
