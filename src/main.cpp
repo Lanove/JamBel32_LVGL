@@ -24,6 +24,7 @@ void checkFirmwareBinary();
 void performFirmwareUpdate(Stream& updateSource, size_t updateSize);
 void macCheck();
 void update_onProgress_callback(size_t s, size_t s2);
+bool rmvDir(const char* path);
 TaskHandle_t audioTask;
 DateTime now;
 
@@ -287,8 +288,11 @@ void audioTask_cb(void* pvParameters) {
           mp3Source->open(audioPath);
           mp3PCM->begin(mp3Source, i2sOut);
         }
-        else
+        else {
           log_e("File is not mp3!");
+          stopAudio = true;
+          log_d("Audio stopped!");
+        }
       }
       xSemaphoreGive(audioMutex);
       lastIsAudioPlaying = isAudioPlaying;
@@ -1240,6 +1244,18 @@ lv_obj_t* modal_create_alert(const char* message, const char* headerText, const 
   return modal;
 }
 
+bool rmvDir(const char* path) {
+  File root = ESPSYS_FS.open(path);
+  File file = root.openNextFile();
+  while (file)
+  {
+    ESPSYS_FS.remove(file.path());
+    file = root.openNextFile();
+  }
+  root.close();
+  file.close();
+  return ESPSYS_FS.rmdir(path);
+}
 bool belManual_load(BelManual* bm_target, size_t len) {
   if (!sdBeginFlag)
     return false;
@@ -1409,7 +1425,7 @@ bool templateJadwal_list_load() {
 bool templateJadwal_create(TemplateJadwal* tj_target) {
   if (!sdBeginFlag)
     return false;
-  log_d("\nTemplateJadwal Create Dummy");
+  log_d("\nTemplateJadwal Create");
   char path[64];
   sprintf(path, PATH_TJ"%s.bin", tj_target->name);
   log_d("Create binary at %s", path);
@@ -1423,7 +1439,7 @@ bool templateJadwal_create(TemplateJadwal* tj_target) {
   file.close();
   sprintf(path, PATH_TJ"%s", tj_target->name);
   log_d("Create dir at %s", path);
-  if (ESPSYS_FS.mkdir(path) == -1) {
+  if (ESPSYS_FS.mkdir(path) == false) {
     log_e("Error : %s\n", strerror(errno));
     return false;
   }
@@ -1464,14 +1480,14 @@ bool templateJadwal_delete(TemplateJadwal* tj_target) {
   char path[64];
   sprintf(path, PATH_TJ"%s", tj_target->name);
   log_d("Delete binary folder at %s", path);
-  if (!ESPSYS_FS.rmdir(path)) {
-    log_e("Error removing folder!");
+  if(rmvDir(path) == false){    
+    log_e("Error deleting folder!");
     return false;
   }
   sprintf(path, PATH_TJ"%s.bin", tj_target->name);
   log_d("Delete binary at %s", path);
-  if (!ESPSYS_FS.remove(path)) {
-    log_e("Error : %s", strerror(errno));
+  if (ESPSYS_FS.remove(path) == false) {
+    log_e("Error deleting file!");
     return false;
   }
   log_d("OK\n");
@@ -1525,6 +1541,8 @@ void macCheck() {
 void checkFirmwareBinary() {
   if (!sdBeginFlag)
     return;
+  if (!ESPSYS_FS.exists("/firmware.bin"))
+    return;
   File updateBin = ESPSYS_FS.open("/firmware.bin");
   if (updateBin) {
     if (updateBin.isDirectory()) {
@@ -1545,13 +1563,13 @@ void checkFirmwareBinary() {
     updateBin.close();
   }
   else
-    log_e("Could not load firmware.bin from sd root");
+    log_e("Could not load firmware.bin");
 }
 void performFirmwareUpdate(Stream& updateSource, size_t updateSize) {
   if (Update.begin(updateSize)) {
     tft.fillScreen(TFT_BLACK);
     tft.setTextSize(2);
-    tft.setTextColor(TFT_GREEN,TFT_BLACK);
+    tft.setTextColor(TFT_GREEN, TFT_BLACK);
     tft.setCursor(0, 0);
     tft.print("Updating Firmware...");
     Update.onProgress(update_onProgress_callback);

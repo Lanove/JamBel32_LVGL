@@ -1,0 +1,30 @@
+Added Pullup 47k to SD DI and DO line
+Moved SD_CS from P0 of IO Expander to IO14 of ESP32 GPIO
+
+Added LCD TFT - Pin Assignment of LCD :
+T_IRQ              B2   5
+T_D0-YN            CLK 12
+T_DIN-XN           R2  19
+T_CS-YP            D   15
+T_CLK-XP           G2  18
+SDO                NC   
+LED                3V3 
+SCK                G2   18
+SDI                R2   19
+DC/RS              B1   21
+RESET              G1   22
+CS                 R1   23
+GND                GND 
+VCC                3V3 
+
+IO2 ADC2_CH2
+IO4 ADC2_CH4
+IO5 
+IO12 ADC ADC2_CH5
+IO15 ADC ADC2_CH3
+IO16 
+IO18 
+IO19 
+IO21 
+IO22 
+IO23 
