@@ -123,6 +123,8 @@ void setup(void) {
 
   macCheck();
   checkFirmwareBinary();
+
+  ioExpander->write(Expander::I2S_EN, HIGH);
 }
 
 unsigned long lastRTCMillis;
@@ -183,7 +185,6 @@ void loop() {
         bellPlayedFlag = true;
         bellPlayedIndex = i;
 
-        ioExpander->write(Expander::I2S_EN, HIGH);
         ioExpander->write(Expander::AUDIO_RELAY, HIGH);
         xSemaphoreTake(audioMutex, portMAX_DELAY);
         // If the audio already playing,
@@ -255,7 +256,6 @@ void loop() {
   }
   if (timerDelayStop.Q()) { // Turn off relay after 2 seconds of signal from core 0 to stop
     stopAudio = false;
-    ioExpander->write(Expander::I2S_EN, LOW);
     ioExpander->write(Expander::AUDIO_RELAY, LOW);
   }
   lv_timer_handler(); /* let the GUI do its work */
@@ -518,7 +518,6 @@ void tabOne() {
     lv_obj_add_event_cb(button, [](lv_event_t* e) {
       WidgetParameterData* wpd = (WidgetParameterData*)lv_event_get_param(e);
 
-      ioExpander->write(Expander::I2S_EN, HIGH);
       ioExpander->write(Expander::AUDIO_RELAY, HIGH);
       xSemaphoreTake(audioMutex, portMAX_DELAY);
       // If the audio already playing,
@@ -1480,7 +1479,7 @@ bool templateJadwal_delete(TemplateJadwal* tj_target) {
   char path[64];
   sprintf(path, PATH_TJ"%s", tj_target->name);
   log_d("Delete binary folder at %s", path);
-  if(rmvDir(path) == false){    
+  if (rmvDir(path) == false) {
     log_e("Error deleting folder!");
     return false;
   }
