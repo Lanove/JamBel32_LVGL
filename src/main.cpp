@@ -174,6 +174,10 @@ void loop() {
   }
 
   if (lastSecond != now.second()) {
+    if (lastDay != now.day()) {
+      jadwalHari_load(&tj_used, jw_used, tj_used.tipeJadwal == TJ_MINGGUAN ? now.dayOfTheWeek() : 0);
+      lastDay = now.day();
+    }
     if (lv_scr_act() == mainScreen) { // Update mainScreen clock and date every second
       lv_label_set_text_fmt(mainScreen_clock, "%02d:%02d:%02d", now.hour(), now.minute(), now.second());
       lv_label_set_text_fmt(mainScreen_date, "%s, %d %s %d", dowToStr(now.dayOfTheWeek()), now.day(), monthToStr(now.month()), now.year());
@@ -233,10 +237,6 @@ void loop() {
         }
       }
       lastNextBelIndex = nextBelIndex;
-    }
-    if (lastDay != now.day()) {
-      jadwalHari_load(&tj_used, jw_used, tj_used.tipeJadwal == TJ_MINGGUAN ? now.dayOfTheWeek() : 0);
-      lastDay = now.day();
     }
   }
 
